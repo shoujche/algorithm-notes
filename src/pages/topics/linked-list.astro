@@ -5,41 +5,15 @@ import LcBadge from '../../components/LcBadge.astro';
 import Idea from '../../components/Idea.astro';
 import Complexity from '../../components/Complexity.astro';
 import CodeBlock from '../../components/CodeBlock.astro';
+import CodeTabs from '../../components/CodeTabs.astro';
 import SinglyDiagram from '../../components/SinglyDiagram.astro';
 import DoublyDiagram from '../../components/DoublyDiagram.astro';
 import ReverseAnim from '../../components/ReverseAnim.astro';
 import LruAnim from '../../components/LruAnim.astro';
 import { chapters } from '../../data/topics';
+import { singlyVariants, doublyVariants } from '../../data/linked-list-code';
 
 const chapter = chapters.find((c) => c.slug === 'linked-list')!;
-
-const singlyCode = `class ListNode:
-    def __init__(self, val=0, next=None):
-        self.val = val        # 节点存的数据
-        self.next = next       # 指向下一个节点（没有则为 None）
-
-# 构建 1 -> 2 -> 3
-head = ListNode(1, ListNode(2, ListNode(3)))
-
-# 遍历
-cur = head
-while cur:
-    print(cur.val)
-    cur = cur.next`;
-
-const doublyCode = `class DListNode:
-    def __init__(self, val=0):
-        self.val = val
-        self.prev = None       # 指向前一个节点
-        self.next = None       # 指向后一个节点
-
-# 在 node 之后插入 new_node
-def insert_after(node, new_node):
-    new_node.prev = node
-    new_node.next = node.next
-    if node.next:
-        node.next.prev = new_node
-    node.next = new_node`;
 
 const reverseCode = `def reverseList(head: ListNode) -> ListNode:
     prev = None
@@ -100,7 +74,7 @@ const lruCode = `class LRUCache:
         <div class="meta">
           <div><span class="n">04</span><span class="l">Topics</span></div>
           <div><span class="n">2</span><span class="l">LeetCode</span></div>
-          <div><span class="n">Python</span><span class="l">Language</span></div>
+          <div><span class="n">4</span><span class="l">Languages</span></div>
           <div><span class="n">动画</span><span class="l">Interactive</span></div>
         </div>
       </div>
@@ -111,10 +85,12 @@ const lruCode = `class LRUCache:
         <h3>单向链表 Singly Linked List</h3>
         <p class="lead">每个节点保存「值 <kbd>val</kbd>」与「指向下一个节点的引用 <kbd>next</kbd>」。只能从头往后走，不能回头；最后一个节点的 next 指向 <kbd>None</kbd>。</p>
         <SinglyDiagram />
-        <CodeBlock code={singlyCode} lang="python" file="list_node.py" />
+        <p>常用操作：<kbd>add_head</kbd> 头部插入、<kbd>add_tail</kbd> 尾部追加、<kbd>insert</kbd> 按位置插入、<kbd>remove</kbd> 按值删除。删除用了一个<b>哑节点（dummy）</b>技巧，让「删头节点」和「删中间节点」写法统一。可切换语言查看实现：</p>
+        <CodeTabs variants={singlyVariants} />
         <Complexity items={[
           { l: '访问第 k 个', v: 'O(n)' },
-          { l: '头部插入 / 删除', v: 'O(1)' },
+          { l: '头部插入', v: 'O(1)' },
+          { l: '尾部插入', v: 'O(n)' },
           { l: '空间', v: 'O(n)' },
         ]} />
       </section>
@@ -125,8 +101,10 @@ const lruCode = `class LRUCache:
         <h3>双向链表 Doubly Linked List</h3>
         <p class="lead">在单向的基础上，每个节点多一个 <kbd>prev</kbd> 指针指向前一个节点。既能往后也能往前 —— 这是实现 LRU 的关键结构。</p>
         <DoublyDiagram />
-        <CodeBlock code={doublyCode} lang="python" file="dlist_node.py" />
+        <p>同样实现 <kbd>add_head</kbd> / <kbd>add_tail</kbd> / <kbd>insert</kbd> / <kbd>remove</kbd>。因为多维护了 <kbd>tail</kbd>，<b>尾部插入降到 O(1)</b>；<kbd>remove</kbd> 拿到节点后直接改前后指针即可，无需再找前驱。注意维护好 <kbd>head</kbd>/<kbd>tail</kbd> 的边界情况：</p>
+        <CodeTabs variants={doublyVariants} />
         <Complexity items={[
+          { l: '头 / 尾插入', v: 'O(1)' },
           { l: '已知指针删除', v: 'O(1)' },
           { l: '双向遍历', v: '✔' },
           { l: '每节点额外', v: '+1 指针' },

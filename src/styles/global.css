@@ -103,6 +103,17 @@ ol.steps li::marker{font-family:var(--font-mono);font-weight:600;color:var(--acc
 .code-figure pre.astro-code{margin:0;padding:17px 20px;border-radius:0;font-size:13px;line-height:1.68;overflow:auto}
 .code-figure pre.astro-code code{font-family:var(--font-mono)}
 
+/* ---------- Language tabs ---------- */
+.code-tabs .tabs-bar{padding:0 15px}
+.code-tabs .tabs{display:flex;gap:2px}
+.code-tabs .tab{appearance:none;background:none;border:none;cursor:pointer;
+  font-family:var(--font-mono);font-size:12px;font-weight:500;color:#767d8f;
+  padding:11px 13px;border-bottom:2px solid transparent;transition:color .15s,border-color .15s;letter-spacing:.2px}
+.code-tabs .tab:hover{color:#c7cdda}
+.code-tabs .tab[aria-selected="true"]{color:#e8ebf2;border-bottom-color:var(--accent)}
+.code-tabs .tab-file{margin-left:auto}
+.code-tabs .tab-panel[hidden]{display:none}
+
 /* ---------- Complexity ---------- */
 .cx{display:flex;gap:0;margin-top:18px;border:1px solid var(--line);border-radius:11px;overflow:hidden;
   background:var(--surface)}

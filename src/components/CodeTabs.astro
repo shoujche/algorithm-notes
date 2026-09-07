@@ -1,0 +1,50 @@
+---
+import { Code } from 'astro:components';
+import type { CodeVariant } from '../data/linked-list-code';
+
+interface Props {
+  variants: CodeVariant[];
+}
+const { variants } = Astro.props;
+---
+<figure class="code-figure code-tabs">
+  <div class="code-bar tabs-bar" role="tablist">
+    <div class="tabs">
+      {variants.map((v, i) => (
+        <button
+          type="button"
+          class="tab"
+          role="tab"
+          data-tab={i}
+          aria-selected={i === 0 ? 'true' : 'false'}
+        >{v.label}</button>
+      ))}
+    </div>
+    <span class="fn tab-file">{variants[0].file}</span>
+  </div>
+  {variants.map((v, i) => (
+    <div class="tab-panel" data-panel={i} data-file={v.file} hidden={i !== 0}>
+      <Code code={v.code.trim()} lang={v.lang as any} theme="github-dark-dimmed" />
+    </div>
+  ))}
+</figure>
+
+<script>
+  document.querySelectorAll<HTMLElement>('.code-tabs').forEach((fig) => {
+    const tabs = Array.from(fig.querySelectorAll<HTMLButtonElement>('.tab'));
+    const panels = Array.from(fig.querySelectorAll<HTMLElement>('.tab-panel'));
+    const fileLabel = fig.querySelector<HTMLElement>('.tab-file');
+
+    tabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const idx = tab.dataset.tab;
+        tabs.forEach((t) => t.setAttribute('aria-selected', t === tab ? 'true' : 'false'));
+        panels.forEach((p) => {
+          const on = p.dataset.panel === idx;
+          p.hidden = !on;
+          if (on && fileLabel) fileLabel.textContent = p.dataset.file ?? '';
+        });
+      });
+    });
+  });
+</script>
