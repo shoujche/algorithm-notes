@@ -44,6 +44,3 @@ src/
 1. 在 `src/data/topics.ts` 的 `chapters` 里登记（把 `ready` 设为 `true`）。
 2. 新建 `src/pages/topics/<slug>.astro`，复用 `BaseLayout` + 现有组件。
 3. 需要新动画时，在 `src/components/` 里新增一个 `*Anim.astro`。
-`
-
-
