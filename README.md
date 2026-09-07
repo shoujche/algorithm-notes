@@ -44,16 +44,6 @@ src/
 1. 在 `src/data/topics.ts` 的 `chapters` 里登记（把 `ready` 设为 `true`）。
 2. 新建 `src/pages/topics/<slug>.astro`，复用 `BaseLayout` + 现有组件。
 3. 需要新动画时，在 `src/components/` 里新增一个 `*Anim.astro`。
+`
 
-## 部署到 GitHub Pages
 
-1. 在 GitHub 新建仓库 **`algorithm-notes`**，把本地代码推上去。
-2. 打开 `astro.config.mjs`，把 `site` 改成 `https://<你的用户名>.github.io`（`base` 保持 `/algorithm-notes`）。
-3. 仓库 **Settings → Pages → Build and deployment → Source** 选 **GitHub Actions**。
-4. 推送到 `main` 分支即自动构建部署，站点地址：
-   `https://<你的用户名>.github.io/algorithm-notes/`
-
-## 建议的 GitHub Topics（提升检索）
-
-`algorithms` `data-structures` `leetcode` `dsa` `algorithm-visualization`
-`animation` `interview` `notes` `python` `learning`
