@@ -1,0 +1,8 @@
+---
+interface Props {
+  kind?: 'base' | 'easy' | 'mid' | 'hard';
+  text: string;
+}
+const { kind = 'base', text } = Astro.props;
+---
+<span class:list={['lc-badge', kind]}>{text}</span>

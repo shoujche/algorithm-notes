@@ -1,0 +1,10 @@
+---
+interface Item { l: string; v: string; }
+interface Props { items: Item[]; }
+const { items } = Astro.props;
+---
+<div class="cx">
+  {items.map((it) => (
+    <div><span class="l">{it.l}</span><b>{it.v}</b></div>
+  ))}
+</div>

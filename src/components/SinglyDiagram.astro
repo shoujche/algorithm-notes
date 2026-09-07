@@ -1,0 +1,30 @@
+---
+// 单向链表静态示意图
+---
+<div class="stage"><div class="grid"><div class="svg-wrap">
+  <svg width="640" height="120" viewBox="0 0 640 120" id="svg-singly"></svg>
+</div></div></div>
+
+<script>
+  import { el, defsArrow, drawNode, C } from '../lib/svg';
+  const svg = document.getElementById('svg-singly') as unknown as SVGElement;
+  if (svg) {
+    defsArrow(svg, 'a-s', C.edge);
+    const vals = [1, 2, 3, 4];
+    const y = 42;
+    let x = 24;
+    vals.forEach((v, i) => {
+      drawNode(svg, x, y, v);
+      if (i < vals.length - 1) {
+        svg.appendChild(el('path', { d: `M ${x + 66} ${y + 24} L ${x + 128} ${y + 24}`, class: 'edge', 'marker-end': 'url(#a-s)' }));
+      } else {
+        const nx = x + 118;
+        svg.appendChild(el('path', { d: `M ${x + 66} ${y + 24} L ${nx} ${y + 24}`, class: 'edge' }));
+        const t = el('text', { x: nx + 10, y: y + 28, class: 'node-lbl' });
+        t.textContent = 'None';
+        svg.appendChild(t);
+      }
+      x += 148;
+    });
+  }
+</script>

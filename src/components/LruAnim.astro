@@ -1,0 +1,115 @@
+---
+// LRU 缓存分步动画
+---
+<div class="stage">
+  <div class="grid">
+    <div class="lru-head">
+      <span class="cap">capacity = 2</span>
+      <span class="dir">← 头 / 最近使用　　　最久未使用 / 尾 →</span>
+    </div>
+    <div class="lru-track" id="lru-track"><span class="lru-empty">（空）</span></div>
+  </div>
+  <div class="panel">
+    <div class="controls">
+      <button class="btn" id="lru-reset">↺ 重置</button>
+      <button class="btn" id="lru-prev">‹ 上一步</button>
+      <button class="btn primary" id="lru-play">▶ 播放</button>
+      <button class="btn" id="lru-next">下一步 ›</button>
+    </div>
+    <div class="stepbar">
+      <div class="progress"><div class="fill" id="lru-fill"></div></div>
+      <span class="count" id="lru-count">0 / 0</span>
+    </div>
+    <div class="caption" id="lru-caption"><span class="k">操作序列</span>put(1,1) put(2,2) get(1) put(3,3) get(2) put(4,4) get(1) get(3) get(4)</div>
+  </div>
+</div>
+
+<script>
+  const cap = 2;
+  type Op = ['put', number, number] | ['get', number];
+  const ops: Op[] = [['put', 1, 1], ['put', 2, 2], ['get', 1], ['put', 3, 3], ['get', 2], ['put', 4, 4], ['get', 1], ['get', 3], ['get', 4]];
+
+  interface Entry { k: number; v: number; }
+  interface Frame { order: Entry[]; cap: string; mru: number | null; evict: number | null; }
+
+  function buildFrames(): Frame[] {
+    const frames: Frame[] = [];
+    let order: Entry[] = [];
+    const find = (k: number) => order.findIndex((e) => e.k === k);
+    frames.push({ order: [], cap: '<span class="k">开始</span>缓存为空，容量 = 2。', mru: null, evict: null });
+    for (const op of ops) {
+      let mru: number | null = null;
+      let evict: number | null = null;
+      let txt = '';
+      if (op[0] === 'put') {
+        const k = op[1], v = op[2];
+        const i = find(k);
+        if (i >= 0) order.splice(i, 1);
+        order.unshift({ k, v });
+        mru = k;
+        txt = `<span class="k">put(${k},${v})</span>写入并放到头部。`;
+        if (order.length > cap) {
+          evict = order[order.length - 1].k;
+          txt += ` 超容量，淘汰尾部 <b>key=${evict}</b>。`;
+          order.pop();
+        }
+      } else {
+        const k = op[1];
+        const i = find(k);
+        if (i >= 0) {
+          const e = order.splice(i, 1)[0];
+          order.unshift(e);
+          mru = k;
+          txt = `<span class="k">get(${k})</span>命中，移到头部，返回 <b>${e.v}</b>。`;
+        } else {
+          txt = `<span class="k">get(${k})</span>未命中，返回 <b>-1</b>。`;
+        }
+      }
+      frames.push({ order: order.map((e) => ({ ...e })), cap: txt, mru, evict });
+    }
+    return frames;
+  }
+
+  const frames = buildFrames();
+  const $ = (id: string) => document.getElementById(id)!;
+  const track = $('lru-track');
+  let idx = 0;
+  let timer: number | null = null;
+
+  function render() {
+    const f = frames[idx];
+    track.innerHTML = '';
+    if (f.order.length === 0 && f.evict == null) track.innerHTML = '<span class="lru-empty">（空）</span>';
+    f.order.forEach((e) => {
+      const c = document.createElement('div');
+      c.className = 'lru-chip' + (e.k === f.mru ? ' mru' : '');
+      c.innerHTML = `<span class="k">${e.k}</span><span class="v">val ${e.v}</span>`;
+      track.appendChild(c);
+    });
+    if (f.evict != null) {
+      const c = document.createElement('div');
+      c.className = 'lru-chip evict';
+      c.innerHTML = `<span class="k">${f.evict}</span><span class="v">淘汰</span>`;
+      track.appendChild(c);
+    }
+    $('lru-caption').innerHTML = f.cap;
+    $('lru-count').textContent = `${idx} / ${frames.length - 1}`;
+    ($('lru-fill') as HTMLElement).style.width = (idx / (frames.length - 1) * 100) + '%';
+    ($('lru-prev') as HTMLButtonElement).disabled = idx === 0;
+    ($('lru-next') as HTMLButtonElement).disabled = idx === frames.length - 1;
+  }
+  function go(i: number) { idx = Math.max(0, Math.min(frames.length - 1, i)); render(); }
+  const playBtn = $('lru-play');
+  function stop() { if (timer) { clearInterval(timer); timer = null; } playBtn.innerHTML = '▶ 播放'; }
+  function play() {
+    if (timer) { stop(); return; }
+    if (idx === frames.length - 1) go(0);
+    playBtn.innerHTML = '⏸ 暂停';
+    timer = window.setInterval(() => { if (idx >= frames.length - 1) { stop(); return; } go(idx + 1); }, 1200);
+  }
+  $('lru-next').onclick = () => go(idx + 1);
+  $('lru-prev').onclick = () => go(idx - 1);
+  $('lru-reset').onclick = () => { stop(); go(0); };
+  playBtn.onclick = play;
+  render();
+</script>

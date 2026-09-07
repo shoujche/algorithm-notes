@@ -1,0 +1,184 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import Complexity from '../../components/Complexity.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import SinglyDiagram from '../../components/SinglyDiagram.astro';
+import DoublyDiagram from '../../components/DoublyDiagram.astro';
+import ReverseAnim from '../../components/ReverseAnim.astro';
+import LruAnim from '../../components/LruAnim.astro';
+import { chapters } from '../../data/topics';
+
+const chapter = chapters.find((c) => c.slug === 'linked-list')!;
+
+const singlyCode = `class ListNode:
+    def __init__(self, val=0, next=None):
+        self.val = val        # 节点存的数据
+        self.next = next       # 指向下一个节点（没有则为 None）
+
+# 构建 1 -> 2 -> 3
+head = ListNode(1, ListNode(2, ListNode(3)))
+
+# 遍历
+cur = head
+while cur:
+    print(cur.val)
+    cur = cur.next`;
+
+const doublyCode = `class DListNode:
+    def __init__(self, val=0):
+        self.val = val
+        self.prev = None       # 指向前一个节点
+        self.next = None       # 指向后一个节点
+
+# 在 node 之后插入 new_node
+def insert_after(node, new_node):
+    new_node.prev = node
+    new_node.next = node.next
+    if node.next:
+        node.next.prev = new_node
+    node.next = new_node`;
+
+const reverseCode = `def reverseList(head: ListNode) -> ListNode:
+    prev = None
+    curr = head
+    while curr:
+        nxt = curr.next     # 1. 记住下一个节点
+        curr.next = prev    # 2. 当前节点掉头指向前面
+        prev = curr         # 3. prev 前移
+        curr = nxt          # 4. curr 前移
+    return prev             # prev 是新的头节点`;
+
+const lruCode = `class LRUCache:
+    def __init__(self, capacity: int):
+        self.cap = capacity
+        self.cache = {}                 # key -> node（哈希表 O(1) 查找）
+        self.head = DListNode()         # 哨兵头（头部 = 最近使用）
+        self.tail = DListNode()         # 哨兵尾（尾部 = 最久未使用）
+        self.head.next = self.tail
+        self.tail.prev = self.head
+
+    def _remove(self, node):            # O(1) 摘除
+        node.prev.next = node.next
+        node.next.prev = node.prev
+
+    def _add_front(self, node):         # O(1) 插到头部
+        node.next = self.head.next
+        node.prev = self.head
+        self.head.next.prev = node
+        self.head.next = node
+
+    def get(self, key: int) -> int:
+        if key not in self.cache:
+            return -1
+        node = self.cache[key]
+        self._remove(node)              # 移到头部 = 标记为最近使用
+        self._add_front(node)
+        return node.val
+
+    def put(self, key: int, value: int) -> None:
+        if key in self.cache:
+            self._remove(self.cache[key])
+        node = DListNode(value); node.key = key
+        self.cache[key] = node
+        self._add_front(node)
+        if len(self.cache) > self.cap:          # 超容量
+            lru = self.tail.prev                 # 淘汰尾部
+            self._remove(lru)
+            del self.cache[lru.key]`;
+---
+<BaseLayout title="链表 Linked List · 算法手记">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">算法手记 / 第 {chapter.num} 章 · 链表 Linked List</span>
+        <h2>链表：从<em>指针</em>开始<br />理解数据结构</h2>
+        <p>链表是理解「引用 / 指针」最好的起点。这一章从单向、双向结构讲起，用分步动画拆解经典的链表反转，最后用双向链表 + 哈希表实现 O(1) 的 LRU 缓存。每题都配可视化、思路与可运行代码。</p>
+        <div class="meta">
+          <div><span class="n">04</span><span class="l">Topics</span></div>
+          <div><span class="n">2</span><span class="l">LeetCode</span></div>
+          <div><span class="n">Python</span><span class="l">Language</span></div>
+          <div><span class="n">动画</span><span class="l">Interactive</span></div>
+        </div>
+      </div>
+
+      <!-- 01 单向链表 -->
+      <section class="article" id="singly">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="基础 · Basics" /></div>
+        <h3>单向链表 Singly Linked List</h3>
+        <p class="lead">每个节点保存「值 <kbd>val</kbd>」与「指向下一个节点的引用 <kbd>next</kbd>」。只能从头往后走，不能回头；最后一个节点的 next 指向 <kbd>None</kbd>。</p>
+        <SinglyDiagram />
+        <CodeBlock code={singlyCode} lang="python" file="list_node.py" />
+        <Complexity items={[
+          { l: '访问第 k 个', v: 'O(n)' },
+          { l: '头部插入 / 删除', v: 'O(1)' },
+          { l: '空间', v: 'O(n)' },
+        ]} />
+      </section>
+
+      <!-- 02 双向链表 -->
+      <section class="article" id="doubly">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="base" text="基础 · Basics" /></div>
+        <h3>双向链表 Doubly Linked List</h3>
+        <p class="lead">在单向的基础上，每个节点多一个 <kbd>prev</kbd> 指针指向前一个节点。既能往后也能往前 —— 这是实现 LRU 的关键结构。</p>
+        <DoublyDiagram />
+        <CodeBlock code={doublyCode} lang="python" file="dlist_node.py" />
+        <Complexity items={[
+          { l: '已知指针删除', v: 'O(1)' },
+          { l: '双向遍历', v: '✔' },
+          { l: '每节点额外', v: '+1 指针' },
+        ]} />
+      </section>
+
+      <!-- 03 链表反转 -->
+      <section class="article" id="reverse">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="easy" text="LeetCode 206 · Easy" /></div>
+        <h3>反转链表 Reverse Linked List</h3>
+        <p class="lead">给你单链表的头节点 <kbd>head</kbd>，请反转链表，并返回反转后的头节点。</p>
+        <h4 class="sub">解题思路 · 双指针迭代</h4>
+        <Idea>
+          三个指针「贴着」链表走：<b style="color:var(--teal)">prev</b> 已反转部分的头，<b style="color:var(--orange)">curr</b> 当前处理的节点，<b style="color:var(--cobalt)">next</b> 临时存住下一个防止断链。
+          <ol class="steps">
+            <li><kbd>next = curr.next</kbd> — 先记住下一个，别丢了</li>
+            <li><kbd>curr.next = prev</kbd> — 把当前节点的箭头掉头</li>
+            <li><kbd>prev = curr</kbd>，<kbd>curr = next</kbd> — 两指针同时前移</li>
+            <li>直到 <kbd>curr</kbd> 为 <kbd>None</kbd>，此时 <kbd>prev</kbd> 就是新头</li>
+          </ol>
+        </Idea>
+        <ReverseAnim />
+        <CodeBlock code={reverseCode} lang="python" file="reverse_list.py" />
+        <Complexity items={[
+          { l: '时间', v: 'O(n)' },
+          { l: '空间', v: 'O(1)' },
+          { l: '遍历', v: '一趟' },
+        ]} />
+      </section>
+
+      <!-- 04 LRU -->
+      <section class="article" id="lru">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="LeetCode 146 · Medium" /></div>
+        <h3>LRU 缓存 LRU Cache</h3>
+        <p class="lead">设计满足 LRU（最近最少使用）约束的缓存，<kbd>get</kbd> 与 <kbd>put</kbd> 都要 O(1)。容量满了就淘汰「最久没被用到」的那个。</p>
+        <h4 class="sub">解题思路 · 哈希表 + 双向链表</h4>
+        <Idea>
+          <b>哈希表</b>负责 O(1) 定位节点；<b>双向链表</b>负责 O(1) 维护使用顺序。约定：<b style="color:var(--accent)">头部 = 最近使用（MRU）</b>，<b>尾部 = 最久未使用（LRU）</b>。
+          <ol class="steps">
+            <li><kbd>get(k)</kbd>：命中就把节点移到头部（刚用过，最新鲜）</li>
+            <li><kbd>put(k,v)</kbd>：新节点插到头部；若超容量，删掉尾部</li>
+            <li>双向链表让「移动 / 删除」都是 O(1)，因为能直接改前后指针</li>
+          </ol>
+        </Idea>
+        <LruAnim />
+        <CodeBlock code={lruCode} lang="python" file="lru_cache.py" />
+        <Complexity items={[
+          { l: 'get', v: 'O(1)' },
+          { l: 'put', v: 'O(1)' },
+          { l: '空间', v: 'O(capacity)' },
+        ]} />
+      </section>
+    </main>
+  </div>
+</BaseLayout>

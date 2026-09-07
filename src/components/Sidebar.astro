@@ -1,0 +1,49 @@
+---
+import type { Section } from '../data/topics';
+import { soonChapters } from '../data/topics';
+import { withBase } from '../lib/url';
+
+interface Props {
+  chapterCn: string;
+  chapterEn: string;
+  sections?: Section[];
+}
+const { chapterCn, chapterEn, sections = [] } = Astro.props;
+---
+<aside>
+  <nav class="nav">
+    <div class="nav-group">
+      <span class="eyebrow">{chapterCn} / {chapterEn}</span>
+      {sections.map((s, i) => (
+        <a href={`#${s.id}`} class={i === 0 ? 'active' : ''} data-nav={s.id}>
+          <span class="idx">{s.num}</span>{s.label}
+          {s.lc && <span class="lc">{s.lc}</span>}
+        </a>
+      ))}
+    </div>
+    <div class="nav-group">
+      <span class="eyebrow">规划中 / Soon</span>
+      {soonChapters.map((c) => (
+        <a href={withBase(`/topics/${c.slug}`)} class="soon"><span class="idx">{c.num}</span>{c.cn}</a>
+      ))}
+    </div>
+  </nav>
+</aside>
+
+<script>
+  // 滚动高亮当前小节
+  const links = [...document.querySelectorAll<HTMLAnchorElement>('aside .nav a[data-nav]')];
+  const secs = links.map((a) => document.getElementById(a.dataset.nav!)).filter(Boolean) as HTMLElement[];
+  if (secs.length) {
+    const obs = new IntersectionObserver((es) => {
+      es.forEach((e) => {
+        if (e.isIntersecting) {
+          links.forEach((l) => l.classList.remove('active'));
+          const i = secs.indexOf(e.target as HTMLElement);
+          if (i >= 0) links[i].classList.add('active');
+        }
+      });
+    }, { rootMargin: '-35% 0px -60% 0px' });
+    secs.forEach((s) => obs.observe(s));
+  }
+</script>

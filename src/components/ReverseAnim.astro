@@ -1,0 +1,130 @@
+---
+// 反转链表分步动画
+---
+<div class="stage">
+  <div class="grid"><div class="svg-wrap">
+    <svg width="660" height="188" viewBox="0 0 660 188" id="svg-reverse"></svg>
+  </div></div>
+  <div class="panel">
+    <div class="state-vars">
+      <span class="prev">prev = <b id="v-prev">null</b></span>
+      <span class="curr">curr = <b id="v-curr">1</b></span>
+      <span class="next">next = <b id="v-next">—</b></span>
+    </div>
+    <div class="controls">
+      <button class="btn" id="rev-reset">↺ 重置</button>
+      <button class="btn" id="rev-prev">‹ 上一步</button>
+      <button class="btn primary" id="rev-play">▶ 播放</button>
+      <button class="btn" id="rev-next">下一步 ›</button>
+    </div>
+    <div class="stepbar">
+      <div class="progress"><div class="fill" id="rev-fill"></div></div>
+      <span class="count" id="rev-count">0 / 0</span>
+    </div>
+    <div class="caption" id="rev-caption"><span class="k">初始化</span>prev 指向 null，curr 指向头节点。</div>
+  </div>
+</div>
+
+<script>
+  import { el, defsArrow, drawNode, C } from '../lib/svg';
+
+  const values = [1, 2, 3, 4];
+  const n = values.length;
+  const positions = values.map((_, i) => 60 + i * 140);
+  const yMid = 100;
+
+  interface Frame { arrows: Record<number, number | null>; prev: number | null; curr: number | null; next: number | null | undefined; cap: string; }
+
+  function buildFrames(): Frame[] {
+    const arrows: Record<number, number | null> = {};
+    for (let i = 0; i < n; i++) arrows[i] = i < n - 1 ? i + 1 : null;
+    const frames: Frame[] = [];
+    let prev: number | null = null;
+    let curr: number | null = 0;
+    let nxt: number | null | undefined = undefined;
+    const snap = (cap: string) => frames.push({ arrows: { ...arrows }, prev, curr, next: nxt, cap });
+    snap('<span class="k">初始化</span>prev = null，curr = 头节点 <b>1</b>，开始遍历。');
+    while (curr !== null) {
+      nxt = arrows[curr];
+      snap(`<span class="k">① 记录</span>next = curr.next，先存住 <b>${nxt === null ? 'null' : values[nxt]}</b>，避免断链。`);
+      arrows[curr] = prev;
+      snap(`<span class="k">② 掉头</span>curr.next = prev：节点 <b>${values[curr]}</b> 反转指向 <b>${prev === null ? 'null' : values[prev]}</b>。`);
+      prev = curr;
+      snap(`<span class="k">③ prev 前移</span>prev = curr，移到节点 <b>${values[prev]}</b>。`);
+      curr = nxt;
+      snap(`<span class="k">④ curr 前移</span>curr = next，移到 <b>${curr === null ? 'null' : values[curr]}</b>。`);
+    }
+    frames.push({ arrows: { ...arrows }, prev, curr: null, next: null, cap: '<span class="k">✅ 完成</span>curr = null，循环结束，新头节点 = prev = <b>4</b>。' });
+    return frames;
+  }
+
+  const frames = buildFrames();
+  const svg = document.getElementById('svg-reverse') as unknown as SVGElement;
+  const $ = (id: string) => document.getElementById(id)!;
+  let idx = 0;
+  let timer: number | null = null;
+
+  function render() {
+    const f = frames[idx];
+    svg.innerHTML = '';
+    defsArrow(svg, 'a-fwd', C.edge);
+    defsArrow(svg, 'a-rev', C.rev);
+    for (let i = 0; i < n; i++) {
+      const tgt = f.arrows[i];
+      if (tgt === null) {
+        const nx = positions[i] + 94;
+        svg.appendChild(el('path', { d: `M ${positions[i] + 66} ${yMid + 10} L ${nx} ${yMid + 34}`, class: 'edge' }));
+        const t = el('text', { x: nx + 4, y: yMid + 40, class: 'node-lbl' });
+        t.textContent = 'null';
+        svg.appendChild(t);
+      } else if (tgt > i) {
+        const x1 = positions[i] + 66, x2 = positions[tgt];
+        svg.appendChild(el('path', { d: `M ${x1} ${yMid + 14} C ${x1 + 34} ${yMid - 26}, ${x2 - 34} ${yMid - 26}, ${x2 - 2} ${yMid + 14}`, class: 'edge', 'marker-end': 'url(#a-fwd)' }));
+      } else {
+        const x1 = positions[i], x2 = positions[tgt] + 66;
+        svg.appendChild(el('path', { d: `M ${x1} ${yMid + 34} C ${x1 - 34} ${yMid + 70}, ${x2 + 34} ${yMid + 70}, ${x2 + 2} ${yMid + 34}`, class: 'edge rev', 'marker-end': 'url(#a-rev)' }));
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      let stroke = C.nodeDefault, fill = '#fff';
+      if (i === f.curr) { stroke = C.curr; fill = '#fdf3ee'; }
+      else if (i === f.prev) { stroke = C.prev; fill = '#f1faf6'; }
+      drawNode(svg, positions[i], yMid - 9, values[i], { stroke, fill });
+    }
+    const badge = (label: string, color: string, i: number | null | undefined) => {
+      if (i === null || i === undefined) return;
+      const bx = positions[i] + 33;
+      const g = el('g', {});
+      g.appendChild(el('rect', { x: bx - 27, y: yMid - 56, width: 54, height: 22, rx: 7, fill: color, opacity: 0.12 }));
+      const t = el('text', { x: bx, y: yMid - 41, 'text-anchor': 'middle', class: 'ptr-badge', fill: color });
+      t.textContent = label;
+      g.appendChild(t);
+      g.appendChild(el('path', { d: `M ${bx} ${yMid - 31} l -5 -7 l 10 0 z`, fill: color }));
+      svg.appendChild(g);
+    };
+    badge('prev', C.prev, f.prev);
+    badge('curr', C.curr, f.curr);
+    $('v-prev').textContent = f.prev === null ? 'null' : String(values[f.prev]);
+    $('v-curr').textContent = f.curr === null ? 'null' : String(values[f.curr]);
+    $('v-next').textContent = f.next === null ? 'null' : (f.next === undefined ? '—' : String(values[f.next]));
+    $('rev-caption').innerHTML = f.cap;
+    $('rev-count').textContent = `${idx} / ${frames.length - 1}`;
+    ($('rev-fill') as HTMLElement).style.width = (idx / (frames.length - 1) * 100) + '%';
+    ($('rev-prev') as HTMLButtonElement).disabled = idx === 0;
+    ($('rev-next') as HTMLButtonElement).disabled = idx === frames.length - 1;
+  }
+  function go(i: number) { idx = Math.max(0, Math.min(frames.length - 1, i)); render(); }
+  const playBtn = $('rev-play');
+  function stop() { if (timer) { clearInterval(timer); timer = null; } playBtn.innerHTML = '▶ 播放'; }
+  function play() {
+    if (timer) { stop(); return; }
+    if (idx === frames.length - 1) go(0);
+    playBtn.innerHTML = '⏸ 暂停';
+    timer = window.setInterval(() => { if (idx >= frames.length - 1) { stop(); return; } go(idx + 1); }, 1100);
+  }
+  $('rev-next').onclick = () => go(idx + 1);
+  $('rev-prev').onclick = () => go(idx - 1);
+  $('rev-reset').onclick = () => { stop(); go(0); };
+  playBtn.onclick = play;
+  render();
+</script>

@@ -1,0 +1,17 @@
+---
+import { Code } from 'astro:components';
+
+interface Props {
+  code: string;
+  lang?: string;
+  file?: string;
+}
+const { code, lang = 'python', file } = Astro.props;
+---
+<figure class="code-figure">
+  <div class="code-bar">
+    {file && <span class="fn">{file}</span>}
+    <span class="lang">{lang.toUpperCase()}</span>
+  </div>
+  <Code code={code.trim()} lang={lang as any} theme="github-dark-dimmed" />
+</figure>

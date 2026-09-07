@@ -1,0 +1,31 @@
+---
+// 双向链表静态示意图
+---
+<div class="stage"><div class="grid"><div class="svg-wrap">
+  <svg width="640" height="140" viewBox="0 0 640 140" id="svg-doubly"></svg>
+</div></div></div>
+
+<script>
+  import { el, defsArrow, drawNode, C } from '../lib/svg';
+  const svg = document.getElementById('svg-doubly') as unknown as SVGElement;
+  if (svg) {
+    defsArrow(svg, 'a-d', C.edge);
+    const vals = [10, 20, 30];
+    const y = 50;
+    let x = 70;
+    vals.forEach((v, i) => {
+      drawNode(svg, x, y, v);
+      if (i < vals.length - 1) {
+        svg.appendChild(el('path', { d: `M ${x + 66} ${y + 16} L ${x + 168} ${y + 16}`, class: 'edge', 'marker-end': 'url(#a-d)' }));
+        svg.appendChild(el('path', { d: `M ${x + 168} ${y + 34} L ${x + 66} ${y + 34}`, class: 'edge', 'marker-end': 'url(#a-d)' }));
+      }
+      x += 168;
+    });
+    const t1 = el('text', { x: 130, y: 34, class: 'node-lbl' });
+    t1.textContent = 'next →';
+    svg.appendChild(t1);
+    const t2 = el('text', { x: 130, y: 118, class: 'node-lbl' });
+    t2.textContent = '← prev';
+    svg.appendChild(t2);
+  }
+</script>
