@@ -1,11 +1,15 @@
 ---
 import { Code } from 'astro:components';
 import type { CodeVariant } from '../data/linked-list-code';
+import { ghBlob } from '../lib/github';
 
 interface Props {
   variants: CodeVariant[];
+  /** 源码所在目录（repo 相对路径），用于生成 GitHub 跳转链接 */
+  dir: string;
 }
-const { variants } = Astro.props;
+const { variants, dir } = Astro.props;
+const hrefOf = (file: string) => ghBlob(`${dir}/${file}`);
 ---
 <figure class="code-figure code-tabs">
   <div class="code-bar tabs-bar" role="tablist">
@@ -20,10 +24,12 @@ const { variants } = Astro.props;
         >{v.label}</button>
       ))}
     </div>
-    <span class="fn tab-file">{variants[0].file}</span>
+    <a class="fn tab-file src-link" href={hrefOf(variants[0].file)} target="_blank" rel="noopener noreferrer" title="在 GitHub 查看源码">
+      <span class="tab-file-name">{variants[0].file}</span><span class="ext">↗</span>
+    </a>
   </div>
   {variants.map((v, i) => (
-    <div class="tab-panel" data-panel={i} data-file={v.file} hidden={i !== 0}>
+    <div class="tab-panel" data-panel={i} data-file={v.file} data-href={hrefOf(v.file)} hidden={i !== 0}>
       <Code code={v.code.trim()} lang={v.lang as any} theme="github-dark-dimmed" />
     </div>
   ))}
@@ -33,7 +39,8 @@ const { variants } = Astro.props;
   document.querySelectorAll<HTMLElement>('.code-tabs').forEach((fig) => {
     const tabs = Array.from(fig.querySelectorAll<HTMLButtonElement>('.tab'));
     const panels = Array.from(fig.querySelectorAll<HTMLElement>('.tab-panel'));
-    const fileLabel = fig.querySelector<HTMLElement>('.tab-file');
+    const srcLink = fig.querySelector<HTMLAnchorElement>('.tab-file');
+    const srcName = fig.querySelector<HTMLElement>('.tab-file-name');
 
     tabs.forEach((tab) => {
       tab.addEventListener('click', () => {
@@ -42,7 +49,10 @@ const { variants } = Astro.props;
         panels.forEach((p) => {
           const on = p.dataset.panel === idx;
           p.hidden = !on;
-          if (on && fileLabel) fileLabel.textContent = p.dataset.file ?? '';
+          if (on) {
+            if (srcName) srcName.textContent = p.dataset.file ?? '';
+            if (srcLink) srcLink.href = p.dataset.href ?? '#';
+          }
         });
       });
     });

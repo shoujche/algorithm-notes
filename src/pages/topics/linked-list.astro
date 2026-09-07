@@ -11,57 +11,16 @@ import DoublyDiagram from '../../components/DoublyDiagram.astro';
 import ReverseAnim from '../../components/ReverseAnim.astro';
 import LruAnim from '../../components/LruAnim.astro';
 import { chapters } from '../../data/topics';
-import { singlyVariants, doublyVariants } from '../../data/linked-list-code';
+import {
+  singlyVariants,
+  doublyVariants,
+  reverseCode,
+  lruCode,
+  CODE_DIR,
+} from '../../data/linked-list-code';
+import { ghBlob } from '../../lib/github';
 
 const chapter = chapters.find((c) => c.slug === 'linked-list')!;
-
-const reverseCode = `def reverseList(head: ListNode) -> ListNode:
-    prev = None
-    curr = head
-    while curr:
-        nxt = curr.next     # 1. 记住下一个节点
-        curr.next = prev    # 2. 当前节点掉头指向前面
-        prev = curr         # 3. prev 前移
-        curr = nxt          # 4. curr 前移
-    return prev             # prev 是新的头节点`;
-
-const lruCode = `class LRUCache:
-    def __init__(self, capacity: int):
-        self.cap = capacity
-        self.cache = {}                 # key -> node（哈希表 O(1) 查找）
-        self.head = DListNode()         # 哨兵头（头部 = 最近使用）
-        self.tail = DListNode()         # 哨兵尾（尾部 = 最久未使用）
-        self.head.next = self.tail
-        self.tail.prev = self.head
-
-    def _remove(self, node):            # O(1) 摘除
-        node.prev.next = node.next
-        node.next.prev = node.prev
-
-    def _add_front(self, node):         # O(1) 插到头部
-        node.next = self.head.next
-        node.prev = self.head
-        self.head.next.prev = node
-        self.head.next = node
-
-    def get(self, key: int) -> int:
-        if key not in self.cache:
-            return -1
-        node = self.cache[key]
-        self._remove(node)              # 移到头部 = 标记为最近使用
-        self._add_front(node)
-        return node.val
-
-    def put(self, key: int, value: int) -> None:
-        if key in self.cache:
-            self._remove(self.cache[key])
-        node = DListNode(value); node.key = key
-        self.cache[key] = node
-        self._add_front(node)
-        if len(self.cache) > self.cap:          # 超容量
-            lru = self.tail.prev                 # 淘汰尾部
-            self._remove(lru)
-            del self.cache[lru.key]`;
 ---
 <BaseLayout title="链表 Linked List · 算法手记">
   <div class="layout">
@@ -86,7 +45,7 @@ const lruCode = `class LRUCache:
         <p class="lead">每个节点保存「值 <kbd>val</kbd>」与「指向下一个节点的引用 <kbd>next</kbd>」。只能从头往后走，不能回头；最后一个节点的 next 指向 <kbd>None</kbd>。</p>
         <SinglyDiagram />
         <p>常用操作：<kbd>add_head</kbd> 头部插入、<kbd>add_tail</kbd> 尾部追加、<kbd>insert</kbd> 按位置插入、<kbd>remove</kbd> 按值删除。删除用了一个<b>哑节点（dummy）</b>技巧，让「删头节点」和「删中间节点」写法统一。可切换语言查看实现：</p>
-        <CodeTabs variants={singlyVariants} />
+        <CodeTabs variants={singlyVariants} dir={CODE_DIR} />
         <Complexity items={[
           { l: '访问第 k 个', v: 'O(n)' },
           { l: '头部插入', v: 'O(1)' },
@@ -102,7 +61,7 @@ const lruCode = `class LRUCache:
         <p class="lead">在单向的基础上，每个节点多一个 <kbd>prev</kbd> 指针指向前一个节点。既能往后也能往前 —— 这是实现 LRU 的关键结构。</p>
         <DoublyDiagram />
         <p>同样实现 <kbd>add_head</kbd> / <kbd>add_tail</kbd> / <kbd>insert</kbd> / <kbd>remove</kbd>。因为多维护了 <kbd>tail</kbd>，<b>尾部插入降到 O(1)</b>；<kbd>remove</kbd> 拿到节点后直接改前后指针即可，无需再找前驱。注意维护好 <kbd>head</kbd>/<kbd>tail</kbd> 的边界情况：</p>
-        <CodeTabs variants={doublyVariants} />
+        <CodeTabs variants={doublyVariants} dir={CODE_DIR} />
         <Complexity items={[
           { l: '头 / 尾插入', v: 'O(1)' },
           { l: '已知指针删除', v: 'O(1)' },
@@ -127,7 +86,7 @@ const lruCode = `class LRUCache:
           </ol>
         </Idea>
         <ReverseAnim />
-        <CodeBlock code={reverseCode} lang="python" file="reverse_list.py" />
+        <CodeBlock code={reverseCode} lang="python" file="reverse_list.py" src={ghBlob(`${CODE_DIR}/reverse_list.py`)} />
         <Complexity items={[
           { l: '时间', v: 'O(n)' },
           { l: '空间', v: 'O(1)' },
@@ -150,7 +109,7 @@ const lruCode = `class LRUCache:
           </ol>
         </Idea>
         <LruAnim />
-        <CodeBlock code={lruCode} lang="python" file="lru_cache.py" />
+        <CodeBlock code={lruCode} lang="python" file="lru_cache.py" src={ghBlob(`${CODE_DIR}/lru_cache.py`)} />
         <Complexity items={[
           { l: 'get', v: 'O(1)' },
           { l: 'put', v: 'O(1)' },

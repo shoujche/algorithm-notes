@@ -23,24 +23,17 @@ npm run build    # 构建静态产物到 dist/
 npm run preview  # 本地预览构建结果
 ```
 
-## 项目结构
+## 源码位置
 
-```
-src/
-├─ data/topics.ts          # 章节注册表（首页 + 侧边栏统一数据源）
-├─ layouts/BaseLayout.astro # 页面外壳（头部 / 字体 / 页脚）
-├─ components/              # 组件
-│  ├─ SiteHeader / Sidebar  # 顶栏、侧边栏
-│  ├─ CodeBlock / Idea …    # 代码块、思路、复杂度、题号徽标
-│  └─ *Anim / *Diagram      # 链表反转、LRU 等 SVG 动画
-├─ pages/
-│  ├─ index.astro           # 首页（章节目录）
-│  └─ topics/linked-list.astro  # 链表章节
-└─ styles/global.css        # 设计令牌与全部样式
-```
+页面里展示的每段代码都是仓库中**真实、可编辑、可运行**的源文件，网页构建时通过 Vite 的 `?raw` 直接读取文件原文。改文件就等于改网页。
 
-### 新增一个章节
+- 链表章节全部源码：[`src/code/linked-list/`](https://github.com/shoujche/algorithm-notes/tree/main/src/code/linked-list)
 
-1. 在 `src/data/topics.ts` 的 `chapters` 里登记（把 `ready` 设为 `true`）。
-2. 新建 `src/pages/topics/<slug>.astro`，复用 `BaseLayout` + 现有组件。
-3. 需要新动画时，在 `src/components/` 里新增一个 `*Anim.astro`。
+| 文件 | 说明 |
+| --- | --- |
+| [`linked_list.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/linked-list/linked_list.py) · [`.java`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/linked-list/LinkedList.java) · [`.go`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/linked-list/linked_list.go) · [`.cpp`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/linked-list/linked_list.cpp) | 单向链表（add_head / add_tail / insert / remove） |
+| [`doubly_linked_list.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/linked-list/doubly_linked_list.py) · [`.java`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/linked-list/DoublyLinkedList.java) · [`.go`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/linked-list/doubly_linked_list.go) · [`.cpp`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/linked-list/doubly_linked_list.cpp) | 双向链表（同上，头尾插入均 O(1)） |
+| [`reverse_list.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/linked-list/reverse_list.py) | 反转链表（LeetCode 206） |
+| [`lru_cache.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/linked-list/lru_cache.py) | LRU 缓存（LeetCode 146） |
+
+> 网页上每个代码块右上角的文件名都可点击，会直接跳到上面对应的 GitHub 源文件。

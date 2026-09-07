@@ -14,6 +14,15 @@ import doublyJava from '../code/linked-list/DoublyLinkedList.java?raw';
 import doublyGo from '../code/linked-list/doubly_linked_list.go?raw';
 import doublyCpp from '../code/linked-list/doubly_linked_list.cpp?raw';
 
+// —— 题解（Python）——
+import reverseCode from '../code/linked-list/reverse_list.py?raw';
+import lruCode from '../code/linked-list/lru_cache.py?raw';
+
+export { reverseCode, lruCode };
+
+/** 本章源码目录（repo 相对路径），用于生成 GitHub 跳转链接 */
+export const CODE_DIR = 'src/code/linked-list';
+
 export interface CodeVariant {
   lang: string; // Shiki 高亮语言
   label: string; // 选项卡显示名
