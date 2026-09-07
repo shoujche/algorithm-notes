@@ -3,6 +3,15 @@
 > 图解数据结构与算法，带分步动画的 LeetCode 题解
 > Visual data structures & algorithms notes with animated LeetCode solutions.
 
+### 🌐 在线访问 · Live
+
+## **https://shoujche.github.io/algorithm-notes/**
+
+[![Website](https://img.shields.io/website?url=https%3A%2F%2Fshoujche.github.io%2Falgorithm-notes%2F&label=%E7%AB%99%E7%82%B9&up_message=online&down_message=offline&style=for-the-badge)](https://shoujche.github.io/algorithm-notes/)
+[![Built with Astro](https://img.shields.io/badge/Built%20with-Astro-BC52EE?style=for-the-badge&logo=astro&logoColor=white)](https://astro.build)
+
+---
+
 从零开始记录数据结构与算法的学习，用可交互的分步动画拆解每一道经典题。基于 [Astro](https://astro.build) 构建，纯静态，部署在 GitHub Pages。
 
 ## 本地开发
