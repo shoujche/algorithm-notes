@@ -1,0 +1,170 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import Complexity from '../../components/Complexity.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import CodeTabs from '../../components/CodeTabs.astro';
+import BinaryTreeDiagram from '../../components/BinaryTreeDiagram.astro';
+import LevelOrderAnim from '../../components/LevelOrderAnim.astro';
+import { chapters } from '../../data/topics';
+import {
+  basicsVariants,
+  levelOrderCode,
+  zigzagCode,
+  rightViewCode,
+  lcaCode,
+  completenessCode,
+  CODE_DIR,
+} from '../../data/binary-tree-code';
+import { ghBlob } from '../../lib/github';
+
+const chapter = chapters.find((c) => c.slug === 'binary-tree')!;
+---
+<BaseLayout title="二叉树 Binary Tree · 算法手记">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">算法手记 / 第 {chapter.num} 章 · 二叉树 Binary Tree</span>
+        <h2>二叉树：一切<em>递归</em>与<br />层序的起点</h2>
+        <p>二叉树是递归思维最好的训练场。这一章从结构与四种遍历讲起，用分步动画拆解 BFS 层序遍历，再顺势拿下它的四个经典变体：锯齿形层序、右视图、最近公共祖先，以及完全性检验。每题都配可视化、思路与可运行代码。</p>
+        <div class="meta">
+          <div><span class="n">06</span><span class="l">Topics</span></div>
+          <div><span class="n">5</span><span class="l">LeetCode</span></div>
+          <div><span class="n">4</span><span class="l">Languages</span></div>
+          <div><span class="n">动画</span><span class="l">Interactive</span></div>
+        </div>
+      </div>
+
+      <!-- 01 构建与遍历 -->
+      <section class="article" id="basics">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="基础 · Basics" /></div>
+        <h3>构建与遍历 Build & Traverse</h3>
+        <p class="lead">每个节点保存「值 <kbd>val</kbd>」以及指向「左孩子 <kbd>left</kbd>」和「右孩子 <kbd>right</kbd>」的引用。没有孩子时指向 <kbd>None</kbd>。下图是一棵满二叉树：</p>
+        <BinaryTreeDiagram id="tree-basics" tree={[1, 2, 3, 4, 5, 6, 7]} />
+        <p>遍历分两大类：<b>深度优先 DFS</b>（前序 / 中序 / 后序，本质是递归）和<b>广度优先 BFS</b>（层序，借助队列）。三种 DFS 的差别只在于「访问根节点」这一步放在递归的哪个位置：</p>
+        <Idea>
+          <ol class="steps">
+            <li><b style="color:var(--orange)">前序</b> <kbd>根 → 左 → 右</kbd>：先处理根，常用于「复制树 / 序列化」</li>
+            <li><b style="color:var(--teal)">中序</b> <kbd>左 → 根 → 右</kbd>：二叉搜索树的中序结果<b>天然有序</b></li>
+            <li><b style="color:var(--cobalt)">后序</b> <kbd>左 → 右 → 根</kbd>：先处理完子树再处理根，常用于「删除树 / 自底向上统计」</li>
+            <li><b>层序</b> <kbd>BFS</kbd>：用队列一层一层从左到右，是本章后面四道题的共同套路</li>
+          </ol>
+        </Idea>
+        <CodeTabs variants={basicsVariants} dir={CODE_DIR} />
+        <Complexity items={[
+          { l: '遍历时间', v: 'O(n)' },
+          { l: 'DFS 空间', v: 'O(h)' },
+          { l: 'BFS 空间', v: 'O(n)' },
+        ]} />
+      </section>
+
+      <!-- 02 层序遍历 -->
+      <section class="article" id="level-order">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="mid" text="LeetCode 102 · Medium" /></div>
+        <h3>二叉树的层序遍历 Level Order</h3>
+        <p class="lead">给你二叉树的根节点 <kbd>root</kbd>，返回其节点值的<b>层序遍历</b>结果（即逐层地，从左到右访问所有节点），按层分组返回。</p>
+        <h4 class="sub">解题思路 · BFS + 队列</h4>
+        <Idea>
+          用一个队列做 BFS。关键技巧：<b>在每轮循环开始时先固定住当前队列长度</b> <kbd>len(q)</kbd>，这正好是「这一层」的节点数，循环这么多次就能把一整层单独分组。
+          <ol class="steps">
+            <li>根节点入队</li>
+            <li>记住当前层节点数 <kbd>n = len(q)</kbd>，循环 <kbd>n</kbd> 次出队并收集本层的值</li>
+            <li>出队时把它的左右孩子入队（留给下一层）</li>
+            <li>队列空则结束，每一轮收集到的就是一层</li>
+          </ol>
+        </Idea>
+        <LevelOrderAnim />
+        <CodeBlock code={levelOrderCode} lang="python" file="level_order.py" src={ghBlob(`${CODE_DIR}/level_order.py`)} />
+        <Complexity items={[
+          { l: '时间', v: 'O(n)' },
+          { l: '空间', v: 'O(n)' },
+          { l: '套路', v: 'BFS 分层' },
+        ]} />
+      </section>
+
+      <!-- 03 锯齿形层序 -->
+      <section class="article" id="zigzag">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="mid" text="LeetCode 103 · Medium" /></div>
+        <h3>锯齿形层序遍历 Zigzag Level Order</h3>
+        <p class="lead">在层序遍历的基础上，要求<b>第一层从左到右，第二层从右到左，第三层再从左到右</b>……如此交替，呈 Z 字形。</p>
+        <h4 class="sub">解题思路 · BFS + 方向翻转</h4>
+        <Idea>
+          BFS 框架完全不变，只需给每一层加一个方向开关 <kbd>left_to_right</kbd>。与其收集完再 <kbd>reverse</kbd>，更优雅的做法是用双端队列 <kbd>deque</kbd>：从左到右就 <kbd>append</kbd> 到队尾，从右到左就 <kbd>appendleft</kbd> 到队首，每层结束翻转方向。
+        </Idea>
+        <BinaryTreeDiagram id="tree-zigzag" tree={[3, 9, 20, null, null, 15, 7]} />
+        <p class="muted">上图层序为 <kbd>[[3], [9, 20], [15, 7]]</kbd>；锯齿形则是 <kbd>[[3], [20, 9], [15, 7]]</kbd>（第二层反向）。</p>
+        <CodeBlock code={zigzagCode} lang="python" file="zigzag_level_order.py" src={ghBlob(`${CODE_DIR}/zigzag_level_order.py`)} />
+        <Complexity items={[
+          { l: '时间', v: 'O(n)' },
+          { l: '空间', v: 'O(n)' },
+          { l: '技巧', v: 'deque 双向' },
+        ]} />
+      </section>
+
+      <!-- 04 右视图 -->
+      <section class="article" id="right-view">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="LeetCode 199 · Medium" /></div>
+        <h3>二叉树的右视图 Right Side View</h3>
+        <p class="lead">想象你站在树的<b>右侧</b>，从上往下看，返回从上到下能看到的节点值。</p>
+        <h4 class="sub">解题思路 · BFS 取每层最后一个</h4>
+        <Idea>
+          还是 BFS 分层。站在右边能看到的，正是<b>每一层最右边（最后一个）的节点</b>。所以分层遍历时，只要判断 <kbd>i == n - 1</kbd>（当前层最后一个）就把它收进结果即可。
+        </Idea>
+        <BinaryTreeDiagram id="tree-right" tree={[1, 2, 3, null, 5, null, 4]} mark={[1, 3, 4]} />
+        <p class="muted">橙色高亮 <kbd>[1, 3, 4]</kbd> 就是从右侧看到的节点（每层最后一个）。注意第二层的 <kbd>5</kbd> 被 <kbd>3</kbd> 挡住了。</p>
+        <CodeBlock code={rightViewCode} lang="python" file="right_side_view.py" src={ghBlob(`${CODE_DIR}/right_side_view.py`)} />
+        <Complexity items={[
+          { l: '时间', v: 'O(n)' },
+          { l: '空间', v: 'O(n)' },
+          { l: '要点', v: '每层末位' },
+        ]} />
+      </section>
+
+      <!-- 05 最近公共祖先 -->
+      <section class="article" id="lca">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="mid" text="LeetCode 236 · Medium" /></div>
+        <h3>最近公共祖先 Lowest Common Ancestor</h3>
+        <p class="lead">给定两个节点 <kbd>p</kbd>、<kbd>q</kbd>，找到它们最近的公共祖先（一个节点也可以是它自己的祖先）。</p>
+        <h4 class="sub">解题思路 · 后序递归</h4>
+        <Idea>
+          自底向上思考。对当前 <kbd>root</kbd>，去左右子树里分别递归查找 <kbd>p</kbd>、<kbd>q</kbd>：
+          <ol class="steps">
+            <li>递归出口：<kbd>root</kbd> 为空、或正好等于 <kbd>p</kbd>/<kbd>q</kbd>，直接返回 <kbd>root</kbd></li>
+            <li>若左右子树<b>各找回一个</b> → <kbd>p</kbd>、<kbd>q</kbd> 分居两侧，当前 <kbd>root</kbd> 就是 LCA</li>
+            <li>若只有一侧非空 → 两个目标都在那一侧，把该侧结果向上返回</li>
+          </ol>
+        </Idea>
+        <BinaryTreeDiagram id="tree-lca" tree={[3, 5, 1, 6, 2, 0, 8]} mark={[6, 2]} mark2={[5]} />
+        <p class="muted">橙色是目标 <kbd>p = 6</kbd>、<kbd>q = 2</kbd>，它们都在 <kbd>5</kbd> 的子树里、分居两侧，所以青色的 <kbd>5</kbd> 就是最近公共祖先。</p>
+        <CodeBlock code={lcaCode} lang="python" file="lowest_common_ancestor.py" src={ghBlob(`${CODE_DIR}/lowest_common_ancestor.py`)} />
+        <Complexity items={[
+          { l: '时间', v: 'O(n)' },
+          { l: '空间', v: 'O(h)' },
+          { l: '套路', v: '后序递归' },
+        ]} />
+      </section>
+
+      <!-- 06 完全性检验 -->
+      <section class="article" id="completeness">
+        <div class="art-head"><span class="num">06</span><LcBadge kind="mid" text="LeetCode 958 · Medium" /></div>
+        <h3>二叉树的完全性检验 Check Completeness</h3>
+        <p class="lead">判断一棵二叉树是否为<b>完全二叉树</b>：除最后一层外每层都填满，且最后一层的节点尽量靠左。</p>
+        <h4 class="sub">解题思路 · BFS 遇空即封口</h4>
+        <Idea>
+          做 BFS，但<b>把空孩子也一起入队</b>。完全二叉树的层序序列里，所有真实节点必须连续排在前面：<b>一旦遇到第一个空节点，后面就不允许再出现任何非空节点</b>。用一个布尔标记 <kbd>seen_none</kbd> 记录「是否见过空位」，之后再遇到真实节点就直接判否。
+        </Idea>
+        <BinaryTreeDiagram id="tree-complete" tree={[1, 2, 3, 4, 5, null, 7]} mark={[7]} />
+        <p class="muted">这棵树<b>不是</b>完全二叉树：节点 <kbd>3</kbd> 缺了左孩子（空位），但右边却挂着 <kbd>7</kbd>（橙色）—— 空位之后又出现了真实节点。</p>
+        <CodeBlock code={completenessCode} lang="python" file="is_complete_tree.py" src={ghBlob(`${CODE_DIR}/is_complete_tree.py`)} />
+        <Complexity items={[
+          { l: '时间', v: 'O(n)' },
+          { l: '空间', v: 'O(n)' },
+          { l: '关键', v: '空孩子入队' },
+        ]} />
+      </section>
+    </main>
+  </div>
+</BaseLayout>

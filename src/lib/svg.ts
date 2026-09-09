@@ -45,3 +45,20 @@ export function drawNode(
   t.textContent = String(val);
   svg.appendChild(t);
 }
+
+// 以 (cx, cy) 为圆心画一个圆形树节点
+export function drawCircleNode(
+  svg: SVGElement, cx: number, cy: number, val: number | string,
+  opts: { stroke?: string; fill?: string; r?: number } = {}
+): void {
+  const stroke = opts.stroke ?? C.nodeDefault;
+  const fill = opts.fill ?? '#fff';
+  const r = opts.r ?? 22;
+  svg.appendChild(el('circle', {
+    cx, cy, r, fill, stroke, 'stroke-width': 2.2,
+    filter: 'drop-shadow(0 1px 2px rgba(25,27,34,.10))',
+  }));
+  const t = el('text', { x: cx, y: cy + 6, 'text-anchor': 'middle', class: 'node-val' });
+  t.textContent = String(val);
+  svg.appendChild(t);
+}

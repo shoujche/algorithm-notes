@@ -182,6 +182,23 @@ svg{display:block;margin:0 auto}
 .lru-chip.evict .k{color:var(--red)}
 .lru-empty{font-family:var(--font-mono);color:var(--muted);font-size:13px;display:flex;align-items:center}
 
+/* ---------- Binary tree BFS ---------- */
+.bfs-row{display:flex;align-items:flex-start;gap:12px;margin-bottom:12px}
+.bfs-tag{font-family:var(--font-mono);font-size:10px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;
+  padding:5px 9px;border-radius:7px;white-space:nowrap;margin-top:2px}
+.bfs-tag.queue-tag{color:var(--cobalt);background:#f0f2fc;border:1px solid #c5cef4}
+.bfs-tag.level-tag{color:var(--teal);background:#f1faf6;border:1px solid #bfe3d6}
+.chips{display:flex;gap:6px;flex-wrap:wrap;min-height:30px;align-items:center}
+.chip{font-family:var(--font-mono);font-weight:700;font-size:13px;min-width:30px;text-align:center;
+  padding:5px 9px;border-radius:8px;border:1px solid var(--line-strong);background:#fff;color:var(--ink)}
+.chip.q{border-color:#c5cef4;background:#f0f2fc;color:var(--cobalt)}
+.chip.d{border-color:#bfe3d6;background:#f1faf6;color:var(--teal)}
+.chip-empty{font-family:var(--font-mono);font-size:12px;color:var(--muted)}
+.levels{display:flex;flex-direction:column;gap:6px}
+.lvl-row{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:9px;transition:.2s}
+.lvl-row.active{background:var(--accent-wash)}
+.lvl-idx{font-family:var(--font-mono);font-size:10.5px;font-weight:700;color:var(--muted);min-width:22px}
+
 /* ---------- Home topic cards ---------- */
 .topic-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;margin-top:8px}
 .topic-card{display:block;border:1px solid var(--line);border-radius:14px;padding:20px;background:var(--surface);

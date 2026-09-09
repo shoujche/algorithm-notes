@@ -1,0 +1,79 @@
+---
+// 通用二叉树静态示意图。
+// tree：堆式层序数组（下标 i 的孩子为 2i+1 / 2i+2，缺失位置填 null）。
+// mark：主高亮（橙），mark2：次高亮（青）。按节点值高亮（同一棵树内值唯一）。
+interface Props {
+  id: string;
+  tree: (number | null)[];
+  mark?: number[];
+  mark2?: number[];
+}
+const { id, tree, mark = [], mark2 = [] } = Astro.props;
+---
+<div class="stage"><div class="grid"><div class="svg-wrap">
+  <svg
+    id={id}
+    class="tree-svg"
+    data-tree={JSON.stringify(tree)}
+    data-mark={JSON.stringify(mark)}
+    data-mark2={JSON.stringify(mark2)}
+  ></svg>
+</div></div></div>
+
+<script>
+  import { el, drawCircleNode, C } from '../lib/svg';
+
+  function layout(svg: SVGElement) {
+    const tree: (number | null)[] = JSON.parse(svg.dataset.tree || '[]');
+    const mark: number[] = JSON.parse(svg.dataset.mark || '[]');
+    const mark2: number[] = JSON.parse(svg.dataset.mark2 || '[]');
+
+    const xGap = 62, yGap = 74, padX = 30, padY = 30;
+    const col: Record<number, number> = {};
+    let counter = 0;
+    // 中序遍历分配横坐标列号，保证节点不重叠
+    const assign = (i: number) => {
+      if (i >= tree.length || tree[i] === null || tree[i] === undefined) return;
+      assign(2 * i + 1);
+      col[i] = counter++;
+      assign(2 * i + 2);
+    };
+    assign(0);
+
+    const depthOf = (i: number) => Math.floor(Math.log2(i + 1));
+    const cx = (i: number) => padX + col[i] * xGap + 22;
+    const cy = (i: number) => padY + depthOf(i) * yGap + 22;
+
+    const width = padX * 2 + (counter - 1) * xGap + 44;
+    let maxDepth = 0;
+    for (const k in col) maxDepth = Math.max(maxDepth, depthOf(+k));
+    const height = padY * 2 + maxDepth * yGap + 44;
+
+    svg.setAttribute('width', String(width));
+    svg.setAttribute('height', String(height));
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    svg.innerHTML = '';
+
+    // 先画边
+    for (let i = 0; i < tree.length; i++) {
+      if (col[i] === undefined) continue;
+      for (const c of [2 * i + 1, 2 * i + 2]) {
+        if (col[c] === undefined) continue;
+        svg.appendChild(el('line', {
+          x1: cx(i), y1: cy(i), x2: cx(c), y2: cy(c), class: 'edge',
+        }));
+      }
+    }
+    // 再画节点
+    for (let i = 0; i < tree.length; i++) {
+      if (col[i] === undefined) continue;
+      const v = tree[i] as number;
+      let stroke = C.nodeDefault, fill = '#fff';
+      if (mark2.includes(v)) { stroke = C.prev; fill = '#f1faf6'; }
+      else if (mark.includes(v)) { stroke = C.curr; fill = '#fdf3ee'; }
+      drawCircleNode(svg, cx(i), cy(i), v, { stroke, fill });
+    }
+  }
+
+  document.querySelectorAll<SVGElement>('.tree-svg').forEach(layout);
+</script>

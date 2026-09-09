@@ -1,0 +1,174 @@
+---
+// 二叉树层序遍历（BFS）分步动画：队列出队 → 收集当前层 → 子节点入队。
+---
+<div class="stage">
+  <div class="grid"><div class="svg-wrap">
+    <svg width="360" height="270" viewBox="0 0 360 270" id="svg-bfs"></svg>
+  </div></div>
+  <div class="panel">
+    <div class="bfs-row">
+      <span class="bfs-tag queue-tag">队列 Queue</span>
+      <div class="chips" id="bfs-queue"></div>
+    </div>
+    <div class="bfs-row">
+      <span class="bfs-tag level-tag">分层结果 Levels</span>
+      <div class="levels" id="bfs-levels"></div>
+    </div>
+    <div class="controls">
+      <button class="btn" id="bfs-reset">↺ 重置</button>
+      <button class="btn" id="bfs-prev">‹ 上一步</button>
+      <button class="btn primary" id="bfs-play">▶ 播放</button>
+      <button class="btn" id="bfs-next">下一步 ›</button>
+    </div>
+    <div class="stepbar">
+      <div class="progress"><div class="fill" id="bfs-fill"></div></div>
+      <span class="count" id="bfs-count">0 / 0</span>
+    </div>
+    <div class="caption" id="bfs-caption"><span class="k">初始化</span>根节点入队，准备逐层遍历。</div>
+  </div>
+</div>
+
+<script>
+  import { el, drawCircleNode, C } from '../lib/svg';
+
+  // 堆式层序数组：LC102 经典样例 [3,9,20,null,null,15,7]
+  const tree: (number | null)[] = [3, 9, 20, null, null, 15, 7];
+  const lc = (i: number) => 2 * i + 1;
+  const rc = (i: number) => 2 * i + 2;
+  const has = (i: number) => i < tree.length && tree[i] !== null;
+
+  // —— 布局：中序分配列号 ——
+  const col: Record<number, number> = {};
+  let counter = 0;
+  const assign = (i: number) => {
+    if (!has(i)) return;
+    assign(lc(i));
+    col[i] = counter++;
+    assign(rc(i));
+  };
+  assign(0);
+  const xGap = 74, yGap = 78, padX = 30, padY = 26;
+  const depthOf = (i: number) => Math.floor(Math.log2(i + 1));
+  const cx = (i: number) => padX + col[i] * xGap + 22;
+  const cy = (i: number) => padY + depthOf(i) * yGap + 22;
+
+  interface Frame { current: number | null; queue: number[]; levels: (number)[][]; cap: string; }
+
+  function buildFrames(): Frame[] {
+    const frames: Frame[] = [];
+    let queue: number[] = [0];
+    const levels: number[][] = [];
+    const snap = (current: number | null, cap: string) =>
+      frames.push({ current, queue: [...queue], levels: levels.map((l) => [...l]), cap });
+
+    snap(null, '<span class="k">初始化</span>根节点 <b>3</b> 入队，队列 = [3]。');
+    while (queue.length) {
+      const size = queue.length;
+      const level: number[] = [];
+      levels.push(level);
+      const ln = levels.length;
+      for (let s = 0; s < size; s++) {
+        const cur = queue.shift()!;
+        level.push(tree[cur] as number);
+        const kids: number[] = [];
+        for (const c of [lc(cur), rc(cur)]) if (has(c)) { queue.push(c); kids.push(tree[c] as number); }
+        const kidTxt = kids.length ? `子节点 <b>${kids.join('、')}</b> 入队` : '无子节点';
+        snap(cur, `<span class="k">出队</span>取出 <b>${tree[cur]}</b> 收入第 ${ln} 层，${kidTxt}。`);
+      }
+      snap(null, `<span class="k">第 ${ln} 层完成</span>结果 = [${level.join(', ')}]，继续下一层。`);
+    }
+    frames.push({ current: null, queue: [], levels: levels.map((l) => [...l]),
+      cap: `<span class="k">✅ 完成</span>层序遍历共 ${levels.length} 层：${JSON.stringify(levels)}。` });
+    return frames;
+  }
+
+  const frames = buildFrames();
+  const svg = document.getElementById('svg-bfs') as unknown as SVGElement;
+  const $ = (id: string) => document.getElementById(id)!;
+  let idx = 0;
+  let timer: number | null = null;
+
+  function render() {
+    const f = frames[idx];
+    const done = new Set<number>();
+    f.levels.forEach((l) => l.forEach((v) => done.add(v)));
+    const inQueue = new Set(f.queue.map((i) => tree[i] as number));
+
+    svg.innerHTML = '';
+    for (let i = 0; i < tree.length; i++) {
+      if (col[i] === undefined) continue;
+      for (const c of [lc(i), rc(i)]) {
+        if (col[c] === undefined) continue;
+        svg.appendChild(el('line', { x1: cx(i), y1: cy(i), x2: cx(c), y2: cy(c), class: 'edge' }));
+      }
+    }
+    for (let i = 0; i < tree.length; i++) {
+      if (col[i] === undefined) continue;
+      const v = tree[i] as number;
+      let stroke = C.nodeDefault, fill = '#fff';
+      if (i === f.current) { stroke = C.curr; fill = '#fdf3ee'; }
+      else if (inQueue.has(v)) { stroke = C.next; fill = '#f0f2fc'; }
+      else if (done.has(v)) { stroke = C.prev; fill = '#f1faf6'; }
+      drawCircleNode(svg, cx(i), cy(i), v, { stroke, fill });
+    }
+
+    // 队列
+    const q = $('bfs-queue');
+    q.innerHTML = '';
+    if (!f.queue.length) {
+      const e = document.createElement('span');
+      e.className = 'chip-empty'; e.textContent = '（空）';
+      q.appendChild(e);
+    } else {
+      f.queue.forEach((i) => {
+        const chip = document.createElement('span');
+        chip.className = 'chip q'; chip.textContent = String(tree[i]);
+        q.appendChild(chip);
+      });
+    }
+
+    // 分层结果
+    const lv = $('bfs-levels');
+    lv.innerHTML = '';
+    if (!f.levels.length) {
+      const e = document.createElement('span');
+      e.className = 'chip-empty'; e.textContent = '（暂无）';
+      lv.appendChild(e);
+    } else {
+      f.levels.forEach((level, li) => {
+        const row = document.createElement('div');
+        row.className = 'lvl-row' + (li === f.levels.length - 1 && f.current !== null ? ' active' : '');
+        const tag = document.createElement('span');
+        tag.className = 'lvl-idx'; tag.textContent = 'L' + (li + 1);
+        row.appendChild(tag);
+        level.forEach((v) => {
+          const chip = document.createElement('span');
+          chip.className = 'chip d'; chip.textContent = String(v);
+          row.appendChild(chip);
+        });
+        lv.appendChild(row);
+      });
+    }
+
+    $('bfs-caption').innerHTML = f.cap;
+    $('bfs-count').textContent = `${idx} / ${frames.length - 1}`;
+    ($('bfs-fill') as HTMLElement).style.width = (idx / (frames.length - 1) * 100) + '%';
+    ($('bfs-prev') as HTMLButtonElement).disabled = idx === 0;
+    ($('bfs-next') as HTMLButtonElement).disabled = idx === frames.length - 1;
+  }
+
+  function go(i: number) { idx = Math.max(0, Math.min(frames.length - 1, i)); render(); }
+  const playBtn = $('bfs-play');
+  function stop() { if (timer) { clearInterval(timer); timer = null; } playBtn.innerHTML = '▶ 播放'; }
+  function play() {
+    if (timer) { stop(); return; }
+    if (idx === frames.length - 1) go(0);
+    playBtn.innerHTML = '⏸ 暂停';
+    timer = window.setInterval(() => { if (idx >= frames.length - 1) { stop(); return; } go(idx + 1); }, 1050);
+  }
+  $('bfs-next').onclick = () => go(idx + 1);
+  $('bfs-prev').onclick = () => go(idx - 1);
+  $('bfs-reset').onclick = () => { stop(); go(0); };
+  playBtn.onclick = play;
+  render();
+</script>
