@@ -82,7 +82,7 @@ Body: hero + one `<section>` per topic.
 ```astro
 <BaseLayout title="二叉树 Binary Tree · 算法手记">
   <div class="layout">
-    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} sections={chapter.sections} />
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
     <main>
       <div class="hero">
         <span class="eyebrow">算法手记 / 第 {chapter.num} 章 · 二叉树 Binary Tree</span>

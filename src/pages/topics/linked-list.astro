@@ -24,7 +24,7 @@ const chapter = chapters.find((c) => c.slug === 'linked-list')!;
 ---
 <BaseLayout title="链表 Linked List · 算法手记">
   <div class="layout">
-    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} sections={chapter.sections} />
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
     <main>
       <div class="hero">
         <span class="eyebrow">算法手记 / 第 {chapter.num} 章 · 链表 Linked List</span>

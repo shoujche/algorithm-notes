@@ -1,17 +1,20 @@
 ---
 import type { Section } from '../data/topics';
-import { soonChapters } from '../data/topics';
+import { chapters } from '../data/topics';
 import { withBase } from '../lib/url';
 
 interface Props {
   chapterCn: string;
   chapterEn: string;
+  currentSlug: string;
   sections?: Section[];
 }
-const { chapterCn, chapterEn, sections = [] } = Astro.props;
+const { chapterCn, chapterEn, currentSlug, sections = [] } = Astro.props;
 ---
 <aside>
   <nav class="nav">
+    <a class="home-link" href={withBase('/')}>← 返回主页 Home</a>
+
     <div class="nav-group">
       <span class="eyebrow">{chapterCn} / {chapterEn}</span>
       {sections.map((s, i) => (
@@ -21,10 +24,17 @@ const { chapterCn, chapterEn, sections = [] } = Astro.props;
         </a>
       ))}
     </div>
+
     <div class="nav-group">
-      <span class="eyebrow">规划中 / Soon</span>
-      {soonChapters.map((c) => (
-        <a href={withBase(`/topics/${c.slug}`)} class="soon"><span class="idx">{c.num}</span>{c.cn}</a>
+      <span class="eyebrow">全部章节 / Chapters</span>
+      {chapters.map((c) => (
+        c.ready ? (
+          <a href={withBase(`/topics/${c.slug}`)} class={c.slug === currentSlug ? 'chapter-cur' : ''}>
+            <span class="idx">{c.num}</span>{c.cn}
+          </a>
+        ) : (
+          <a class="soon"><span class="idx">{c.num}</span>{c.cn}</a>
+        )
       ))}
     </div>
   </nav>

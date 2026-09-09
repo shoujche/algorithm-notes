@@ -50,6 +50,11 @@ aside{position:sticky;top:82px;align-self:start;height:calc(100vh - 110px);overf
 .nav a.active{background:var(--accent-wash);color:var(--accent-ink);font-weight:600}
 .nav a.active .idx{color:var(--accent)}
 .nav a.soon{opacity:.45;pointer-events:none}
+.nav .home-link{display:inline-flex;align-items:center;gap:6px;margin:0 0 20px 4px;font-family:var(--font-mono);
+  font-size:12px;color:var(--muted);transition:.15s}
+.nav .home-link:hover{color:var(--accent)}
+.nav a.chapter-cur{background:var(--accent-wash);color:var(--accent-ink);font-weight:600;pointer-events:none}
+.nav a.chapter-cur .idx{color:var(--accent)}
 
 main{min-width:0}
 
