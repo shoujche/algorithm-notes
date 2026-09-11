@@ -1,0 +1,195 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import Interview from '../../components/Interview.astro';
+import Complexity from '../../components/Complexity.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import { chapters } from '../../data/topics';
+import { sseServer, websocketDemo, streamingClient, CODE_DIR } from '../../data/network-streaming-code';
+import { ghBlob } from '../../lib/github';
+
+const chapter = chapters.find((c) => c.slug === 'network-streaming')!;
+---
+<BaseLayout title="网络与流式 · Python 面试 · 算法与 Python 面试手记" active="python">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Python & Agent / {chapter.num} · 网络与流式</span>
+        <h2>网络与<em>流式</em>:<br />从 HTTP 到 LLM token 流</h2>
+        <p>LLM 应用离不开流式:请求怎么发、响应怎么边算边推、SSE 和 WebSocket 怎么选。这一章从 HTTP 基础讲到 chunked 流式、SSE vs WebSocket 对比,以及背压与超时的工程细节。</p>
+        <div class="meta">
+          <div><span class="n">4</span><span class="l">Topics</span></div>
+          <div><span class="n">SSE</span><span class="l">核心</span></div>
+          <div><span class="n">对比</span><span class="l">图解</span></div>
+          <div><span class="n">面试</span><span class="l">高频</span></div>
+        </div>
+      </div>
+
+      <!-- 01 HTTP 基础 -->
+      <section class="article" id="http">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="基础 · Basics" /></div>
+        <h3>HTTP 基础与常见状态码</h3>
+        <p class="lead">HTTP 是请求-响应式的<b>无状态</b>应用层协议。面试常考:请求方法的语义、状态码分类、以及 <kbd>HTTP/1.1</kbd> 到 <kbd>HTTP/2</kbd> 的连接演进。</p>
+        <Idea>
+          <b>请求方法(语义)</b>:<kbd>GET</kbd> 读取、幂等无副作用;<kbd>POST</kbd> 创建/提交,非幂等;<kbd>PUT</kbd> 全量替换,幂等;<kbd>DELETE</kbd> 删除,幂等。「幂等」指重复执行结果相同——这是重试策略的依据。
+          <ol class="steps">
+            <li><b>2xx 成功</b>:<kbd>200 OK</kbd>、<kbd>201 Created</kbd>、<kbd>204 No Content</kbd>。</li>
+            <li><b>3xx 重定向</b>:<kbd>301 永久</kbd>、<kbd>302/307 临时</kbd>、<kbd>304 Not Modified</kbd>(命中缓存)。</li>
+            <li><b>4xx 客户端错</b>:<kbd>400 参数错</kbd>、<kbd>401 未认证</kbd>、<kbd>403 无权限</kbd>、<kbd>404 不存在</kbd>、<kbd>429 限流</kbd>。</li>
+            <li><b>5xx 服务端错</b>:<kbd>500 内部错</kbd>、<kbd>502 网关错</kbd>、<kbd>503 不可用</kbd>、<kbd>504 网关超时</kbd>。</li>
+          </ol>
+        </Idea>
+        <div class="cx3">
+          <div class="cx3-col">
+            <h5>HTTP/1.1</h5>
+            <ul>
+              <li>默认 <b>keep-alive</b> 复用连接</li>
+              <li>但同一连接<b>串行</b>请求</li>
+              <li>队头阻塞(HOL blocking)</li>
+            </ul>
+          </div>
+          <div class="cx3-col">
+            <h5>HTTP/2</h5>
+            <ul>
+              <li>单连接<b>多路复用</b>并发流</li>
+              <li>二进制分帧、头部压缩</li>
+              <li>解决应用层队头阻塞</li>
+            </ul>
+          </div>
+          <div class="cx3-col">
+            <h5>keep-alive</h5>
+            <ul>
+              <li>复用 TCP,免重复握手</li>
+              <li>省 RTT 与 TLS 开销</li>
+              <li>流式长连接的基础</li>
+            </ul>
+          </div>
+        </div>
+        <Interview q="301 和 302 有什么区别?">
+          <p><kbd>301 Moved Permanently</kbd> 是<b>永久</b>重定向,浏览器和搜索引擎会缓存新地址、更新书签,后续直接访问新 URL(适合域名迁移)。<kbd>302 Found</kbd>(及语义更明确的 <kbd>307</kbd>)是<b>临时</b>重定向,不缓存,每次仍先请求原 URL(适合登录跳转、A/B)。SEO 上 301 传递权重,302 不传递。</p>
+        </Interview>
+      </section>
+
+      <!-- 02 SSE vs WebSocket -->
+      <section class="article" id="sse-vs-ws">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="mid" text="对比 · Compare" /></div>
+        <h3>SSE vs WebSocket</h3>
+        <p class="lead">两种「服务端推送」方案。<b>SSE</b> 是基于 HTTP 的单向流(服务端→客户端);<b>WebSocket</b> 是独立协议的全双工通道。LLM 流式几乎都用 SSE。</p>
+        <div class="cmp">
+          <div class="cmp-row cmp-head">
+            <span></span><span>SSE</span><span>WebSocket</span>
+          </div>
+          <div class="cmp-row"><span class="k">方向</span><span>单向(服务端推)</span><span class="hl">全双工(双向)</span></div>
+          <div class="cmp-row"><span class="k">协议</span><span class="hl">普通 HTTP / HTTP2</span><span>ws:// 独立协议(101 升级)</span></div>
+          <div class="cmp-row"><span class="k">格式</span><span>text/event-stream 文本帧</span><span>二进制/文本帧,自定义</span></div>
+          <div class="cmp-row"><span class="k">重连</span><span class="hl">浏览器自动重连(Last-Event-ID)</span><span>需自己实现</span></div>
+          <div class="cmp-row"><span class="k">代理/防火墙</span><span class="hl">友好(就是 HTTP)</span><span>可能被拦(需支持 Upgrade)</span></div>
+          <div class="cmp-row"><span class="k">典型场景</span><span class="hl">LLM token 流、通知、行情</span><span>聊天、协同编辑、游戏</span></div>
+        </div>
+        <Idea>
+          <b>SSE 帧格式</b>:每帧以 <kbd>data:</kbd> 开头,<kbd>\n\n</kbd> 结束一帧;可带 <kbd>id:</kbd>(断线重连凭据)、<kbd>event:</kbd>(事件名)、<kbd>retry:</kbd>(重连间隔)。下面是 SSE 服务端与 WebSocket echo 端点的对照实现。
+        </Idea>
+        <h4 class="sub">SSE 服务端 · StreamingResponse 输出 token 流</h4>
+        <CodeBlock code={sseServer} lang="python" file="sse_server.py" src={ghBlob(`${CODE_DIR}/sse_server.py`)} />
+        <h4 class="sub">WebSocket · 全双工 echo 端点</h4>
+        <CodeBlock code={websocketDemo} lang="python" file="websocket_demo.py" src={ghBlob(`${CODE_DIR}/websocket_demo.py`)} />
+        <Interview q="为什么 LLM 流式用 SSE 而不是 WebSocket?">
+          <p>因为 LLM 输出是<b>纯单向</b>的(客户端发一次 prompt,服务端持续吐 token),不需要全双工。SSE 就是普通 HTTP,天然兼容现有的鉴权、负载均衡、CDN、代理,浏览器 <kbd>EventSource</kbd> 还自带断线重连;而 WebSocket 要独立协议升级、要自己处理重连和心跳,复杂度更高却用不上双向能力。所以 OpenAI、Anthropic 等的流式 API 都用 SSE(<kbd>text/event-stream</kbd> + <kbd>data: [DONE]</kbd>)。</p>
+        </Interview>
+      </section>
+
+      <!-- 03 流式输出原理 -->
+      <section class="article" id="streaming">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="mid" text="原理 · Internals" /></div>
+        <h3>流式输出原理</h3>
+        <p class="lead">流式的底层是 HTTP <b>chunked transfer encoding</b>(分块传输):服务端不必先算出完整响应体、也不必知道总长度(<kbd>Content-Length</kbd>),而是<b>边算边发</b>,一块一块推给客户端。</p>
+        <Idea>
+          普通响应要等<b>整段生成完</b>才发出,首字节延迟(TTFB)高;流式用生成器边算边 <kbd>yield</kbd>,首个 token 一算出来就下发,<b>首字节延迟极低</b>,用户立刻看到打字机效果。
+          <ol class="steps">
+            <li><b>服务端</b>:响应头 <kbd>Transfer-Encoding: chunked</kbd>,每块前带十六进制长度,末尾用<b>长度为 0 的块</b>标记结束。</li>
+            <li><b>生成器</b>:FastAPI 的 <kbd>StreamingResponse</kbd> 接收 async 生成器,每 <kbd>yield</kbd> 一次就 flush 一块。</li>
+            <li><b>客户端</b>:用 <kbd>httpx.stream()</kbd> 逐块读取,不等整体加载进内存。</li>
+          </ol>
+        </Idea>
+        <h4 class="sub">流式客户端 · httpx 逐块消费</h4>
+        <CodeBlock code={streamingClient} lang="python" file="streaming_client.py" src={ghBlob(`${CODE_DIR}/streaming_client.py`)} />
+        <Complexity items={[
+          { l: '首字节延迟', v: '低(边算边发)' },
+          { l: '总长度', v: '未知(无 Content-Length)' },
+          { l: '结束标志', v: '长度 0 的 chunk' },
+        ]} />
+        <Interview q="chunked 编码怎么知道流结束了?">
+          <p>每个 chunk 的格式是「<b>十六进制长度\r\n数据\r\n</b>」。当服务端发出一个<b>长度为 0</b> 的块(即 <kbd>0\r\n\r\n</kbd>)时,表示<b>传输结束</b>——这就是终止块(last-chunk)。所以客户端靠读到 0 长度块判断结束,而不是靠 <kbd>Content-Length</kbd>(chunked 下没有这个头)。注意:SSE 应用层的 <kbd>[DONE]</kbd> 是业务约定,和 chunked 的 0 长度块是<b>两个层次</b>的结束信号。</p>
+        </Interview>
+      </section>
+
+      <!-- 04 背压与超时 -->
+      <section class="article" id="backpressure">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="hard" text="工程 · Ops" /></div>
+        <h3>背压与超时</h3>
+        <p class="lead">流式不是「发出去就完事」。当<b>客户端消费速度跟不上服务端生产速度</b>,数据会在缓冲区堆积,这就是<b>背压(backpressure)</b>;再叠加连接超时与取消,构成流式的工程难点。</p>
+        <Idea>
+          TCP 本身有流控:接收方缓冲满了,发送方 <kbd>write</kbd> 会阻塞(或异步框架里挂起),从而<b>反压</b>到生产端,让它慢下来。ASGI 服务器据此自动节流。但若中间有无限队列缓冲,背压信号就被吞掉,导致<b>内存暴涨</b>。
+          <ol class="steps">
+            <li><b>超时分层</b>:<kbd>connect</kbd>(连接)超时要短;<kbd>read</kbd>(两帧间隔)超时要给足,否则流式长间隔会被误判断连。</li>
+            <li><b>取消传播</b>:客户端断开时,服务端应停止生成(检测 <kbd>request.is_disconnected()</kbd> 或捕获 <kbd>asyncio.CancelledError</kbd>),避免白算 token 浪费算力。</li>
+            <li><b>心跳</b>:长时间无数据时发送注释帧 <kbd>: keep-alive\n\n</kbd>,防止代理因空闲超时切断连接。</li>
+          </ol>
+        </Idea>
+        <div class="cx3">
+          <div class="cx3-col">
+            <h5>背压 Backpressure</h5>
+            <ul>
+              <li>消费慢 → 缓冲堆积</li>
+              <li>TCP 流控自动反压</li>
+              <li>避免无界队列</li>
+            </ul>
+          </div>
+          <div class="cx3-col">
+            <h5>超时 Timeout</h5>
+            <ul>
+              <li>connect 短、read 长</li>
+              <li>区分空闲与总时长</li>
+              <li>重试要看幂等性</li>
+            </ul>
+          </div>
+          <div class="cx3-col">
+            <h5>取消 Cancel</h5>
+            <ul>
+              <li>客户端断连即停生成</li>
+              <li>释放上游 LLM 请求</li>
+              <li>省算力与配额</li>
+            </ul>
+          </div>
+        </div>
+        <Interview q="流式请求中途客户端关掉了页面,服务端会怎样?">
+          <p>如果不处理,服务端的生成器会<b>继续运行、继续调用上游 LLM</b>,白白消耗 token 和算力,直到某次 <kbd>write</kbd> 才发现连接已断。正确做法:在生成循环里检测断连——FastAPI 可用 <kbd>await request.is_disconnected()</kbd>,或依赖 ASGI 在客户端断开时向协程抛 <kbd>asyncio.CancelledError</kbd>,捕获后<b>主动中止上游请求</b>并清理资源。这是流式服务省钱和稳定的关键。</p>
+        </Interview>
+      </section>
+    </main>
+  </div>
+</BaseLayout>
+
+<style>
+  /* 三栏对比(复用样板手法) */
+  .cx3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 18px 0; }
+  .cx3-col { border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; background: var(--surface); }
+  .cx3-col h5 { margin: 0 0 10px; font-family: var(--font-display); font-size: 15px; color: var(--accent-ink); }
+  .cx3-col ul { margin: 0; padding-left: 18px; }
+  .cx3-col li { margin: 7px 0; font-size: 13.5px; color: var(--graphite); line-height: 1.5; }
+  @media (max-width: 860px) { .cx3 { grid-template-columns: 1fr; } }
+
+  /* SSE vs WebSocket 对比表 */
+  .cmp { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; margin: 18px 0; background: var(--surface); }
+  .cmp-row { display: grid; grid-template-columns: 96px 1fr 1fr; align-items: center; }
+  .cmp-row > span { padding: 11px 14px; font-size: 13px; color: var(--graphite); line-height: 1.5; border-top: 1px solid var(--line); }
+  .cmp-row > span:not(:last-child) { border-right: 1px solid var(--line); }
+  .cmp-row.cmp-head > span { background: color-mix(in srgb, var(--accent) 8%, transparent); font-family: var(--font-display); font-size: 13.5px; color: var(--accent-ink); font-weight: 600; border-top: none; }
+  .cmp-row .k { font-family: var(--font-mono); font-size: 12px; color: var(--muted); font-weight: 600; }
+  .cmp-row .hl { color: var(--accent-ink); font-weight: 600; background: color-mix(in srgb, var(--accent) 5%, transparent); }
+  @media (max-width: 860px) { .cmp-row { grid-template-columns: 72px 1fr 1fr; } .cmp-row > span { font-size: 12px; padding: 9px 8px; } }
+</style>
+

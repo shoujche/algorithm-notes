@@ -1,0 +1,155 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import Interview from '../../components/Interview.astro';
+import Complexity from '../../components/Complexity.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import { chapters } from '../../data/topics';
+import { refcount, cycle, weakrefDemo, slotsDemo, CODE_DIR } from '../../data/memory-gc-code';
+import { ghBlob } from '../../lib/github';
+
+const chapter = chapters.find((c) => c.slug === 'memory-gc')!;
+---
+<BaseLayout title="内存管理与 GC · Python 面试 · 算法与 Python 面试手记" active="python">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Python & Agent / {chapter.num} · 内存管理与 GC</span>
+        <h2>内存管理与 <em>GC</em>:<br />引用计数为主,分代回收兜底</h2>
+        <p>CPython 的内存管理是「引用计数 + 分代垃圾回收」的双机制。这一章讲清引用计数如何即时回收、循环引用为何是它的死穴、分代 GC 怎样用标记-清除收尾,以及 weakref 与 __slots__ 两个高频优化点。</p>
+        <div class="meta">
+          <div><span class="n">5</span><span class="l">Topics</span></div>
+          <div><span class="n">refcount</span><span class="l">核心</span></div>
+          <div><span class="n">图解</span><span class="l">分代</span></div>
+          <div><span class="n">面试</span><span class="l">高频</span></div>
+        </div>
+      </div>
+
+      <!-- 01 引用计数 -->
+      <section class="article" id="refcount">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="基础 · Basics" /></div>
+        <h3>引用计数</h3>
+        <p class="lead"><b>引用计数(reference counting)</b>是 CPython 的<b>主要</b>内存管理机制:每个对象的头部有一个 <kbd>ob_refcnt</kbd> 字段,记录它被引用的次数。计数<b>归零的瞬间</b>,对象立即被释放。</p>
+        <Idea>
+          赋值、传参、放入容器都会让计数 <b>+1</b>;<kbd>del</kbd>、离开作用域、从容器移除都会让它 <b>-1</b>。这带来一个重要特性——<b>确定性回收</b>:对象在最后一个引用消失时立刻销毁,<kbd>__del__</kbd> 也随之调用。
+          <ol class="steps">
+            <li><b>优点</b>:实时回收、内存及时释放、实现简单、回收时机可预测。</li>
+            <li><b>缺点</b>:每次增删都要改计数(有开销),且<b>无法处理循环引用</b>(见下一节)。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={refcount} lang="python" file="refcount.py" src={ghBlob(`${CODE_DIR}/refcount.py`)} />
+        <Interview q="引用计数的优缺点?为什么 sys.getrefcount 结果总比预期多 1?">
+          <p><b>优点</b>:回收及时、时机确定、局部性好;<b>缺点</b>:维护计数有运行时开销、非线程安全(靠 GIL 保护)、且解决不了循环引用。调用 <kbd>sys.getrefcount(obj)</kbd> 时,<kbd>obj</kbd> 作为<b>函数实参</b>本身又产生一个临时引用,所以返回值比真实引用数多 1。</p>
+        </Interview>
+      </section>
+
+      <!-- 02 循环引用 -->
+      <section class="article" id="cycle">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="mid" text="缺陷 · Pitfall" /></div>
+        <h3>循环引用问题</h3>
+        <p class="lead">引用计数有个<b>致命缺陷</b>:两个(或多个)对象<b>互相引用</b>时,即使外部再无任何引用,它们的计数也永远停在 1,<b>无法归零</b>——内存泄漏。</p>
+        <Idea>
+          <kbd>A.partner = B</kbd> 且 <kbd>B.partner = A</kbd>,函数返回后局部变量 <kbd>a</kbd>、<kbd>b</kbd> 消失,但 A、B 仍被对方引用,计数都是 1。引用计数只看「计数是否为 0」,识别不出这种<b>互相拉扯</b>的孤岛。这正是 CPython 需要一个<b>额外的垃圾回收器</b>(gc 模块)的原因。
+        </Idea>
+        <CodeBlock code={cycle} lang="python" file="cycle.py" src={ghBlob(`${CODE_DIR}/cycle.py`)} />
+        <Interview q="循环引用一定会内存泄漏吗?如何避免?">
+          <p>不一定。CPython 的<b>分代 gc</b> 会用标记-清除专门回收这类不可达的循环(下一节)。规避手段:①用 <kbd>weakref</kbd> 打破环;②手动 <kbd>del</kbd> 断开引用;③避免在有 <kbd>__del__</kbd> 的对象间构造环(旧版本 gc 无法回收带 <kbd>__del__</kbd> 的循环,3.4+ 已改善)。</p>
+        </Interview>
+      </section>
+
+      <!-- 03 分代垃圾回收 -->
+      <section class="article" id="gc">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="hard" text="原理 · Internals" /></div>
+        <h3>分代垃圾回收</h3>
+        <p class="lead">为了兜底循环引用,CPython 额外用一套<b>分代垃圾回收(generational GC)</b>,靠<b>标记-清除(mark & sweep)</b>找出不可达的对象环。核心洞见:<b>大多数对象都是「朝生夕死」的</b>,越老的对象越可能长期存活。</p>
+        <div class="gen-diagram">
+          <div class="gen-row">
+            <div class="gen gen0">
+              <span class="gen-tag">Gen 0</span>
+              <span class="gen-name">新生代</span>
+              <span class="gen-desc">新对象在此<br />回收最频繁</span>
+            </div>
+            <div class="promote"><span class="arrow">存活 →</span><span class="promote-lbl">晋升</span></div>
+            <div class="gen gen1">
+              <span class="gen-tag">Gen 1</span>
+              <span class="gen-name">中生代</span>
+              <span class="gen-desc">熬过一次回收<br />频率降低</span>
+            </div>
+            <div class="promote"><span class="arrow">存活 →</span><span class="promote-lbl">晋升</span></div>
+            <div class="gen gen2">
+              <span class="gen-tag">Gen 2</span>
+              <span class="gen-name">老生代</span>
+              <span class="gen-desc">长期存活<br />回收最少</span>
+            </div>
+          </div>
+          <div class="gen-note">每代有一个计数阈值(默认 <kbd>700 / 10 / 10</kbd>);某代分配触发阈值时扫描该代,<b>存活对象晋升到下一代</b>。老代越少扫,越省 CPU。</div>
+        </div>
+        <Idea>
+          <b>为什么要分代?</b> 若每次都扫描全部对象,开销随存活对象线性增长。分代把「频繁扫新、少扫老」结合起来:新生代对象死得快、扫得勤,收益高;老生代大多长命,扫描频率调低,避免无谓遍历。
+          <ol class="steps">
+            <li><b>标记</b>:从根出发遍历可达对象,并扣除内部互相引用后判断哪些成环孤立。</li>
+            <li><b>清除</b>:回收不可达的循环垃圾;存活者<b>晋升</b>到更老一代。</li>
+          </ol>
+        </Idea>
+        <Interview q="gc 什么时候触发?为什么需要分代?">
+          <p>gc <b>不是定时</b>触发,而是<b>按分配量</b>:当「新分配数 − 释放数」超过某代阈值(<kbd>gc.get_threshold()</kbd> 默认 700/10/10)时,扫描该代及更年轻的代。<b>分代的意义</b>是利用「弱代假设」——多数对象很快死亡,把回收精力集中在新生代,老对象少扫,从而用更小的平均开销覆盖循环引用回收。纯引用计数处理不了环,所以这套 gc 是必需的补充。</p>
+        </Interview>
+      </section>
+
+      <!-- 04 弱引用 -->
+      <section class="article" id="weakref">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="优化 · Optimization" /></div>
+        <h3>弱引用</h3>
+        <p class="lead"><b>弱引用(weak reference)</b>指向对象但<b>不增加引用计数</b>。对象照常按引用计数被回收,弱引用随之失效(返回 <kbd>None</kbd>)。它专治「缓存/观察者钉住对象导致的内存泄漏」。</p>
+        <Idea>
+          普通字典缓存会持有<b>强引用</b>,把对象永久钉在内存里;用 <kbd>weakref.WeakValueDictionary</kbd> 后,缓存只弱引用值,一旦外部不再使用,值被回收、缓存条目<b>自动消失</b>。还可用 <kbd>weakref.ref(obj)</kbd> 或回调打破循环引用。
+        </Idea>
+        <CodeBlock code={weakrefDemo} lang="python" file="weakref_demo.py" src={ghBlob(`${CODE_DIR}/weakref_demo.py`)} />
+        <Interview q="哪些对象不能被弱引用?weakref 有什么典型用途?">
+          <p><kbd>int</kbd>、<kbd>str</kbd>、<kbd>tuple</kbd> 等内置类型的实例<b>默认不支持</b>弱引用(需在自定义类中才有 <kbd>__weakref__</kbd> 槽)。典型用途:①<b>缓存</b>(WeakValueDictionary)避免泄漏;②<b>观察者/回调</b>不阻止被观察对象回收;③打破循环引用。</p>
+        </Interview>
+      </section>
+
+      <!-- 05 __slots__ -->
+      <section class="article" id="slots">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="mid" text="优化 · Optimization" /></div>
+        <h3>__slots__ 优化</h3>
+        <p class="lead">默认每个实例都带一个 <kbd>__dict__</kbd> 来存属性,灵活但费内存。声明 <kbd>__slots__</kbd> 后,属性存进<b>固定槽位</b>,省去 __dict__,大批量小对象能显著降内存。</p>
+        <CodeBlock code={slotsDemo} lang="python" file="slots_demo.py" src={ghBlob(`${CODE_DIR}/slots_demo.py`)} />
+        <Complexity items={[
+          { l: '省内存', v: '去掉 __dict__' },
+          { l: '副作用', v: '禁止动态属性' },
+          { l: '适用', v: '海量小对象' },
+        ]} />
+        <Interview q="__slots__ 有什么代价?什么时候不该用?">
+          <p>代价:①<b>不能再动态加属性</b>(赋值抛 AttributeError);②默认<b>无 __dict__</b>,某些依赖 __dict__ 的库/序列化会受影响;③<b>继承</b>时子类若不声明 __slots__ 仍会带上 __dict__,优化失效。当类需要灵活扩展属性、或实例数量不大时,不必用;只有<b>大量固定结构的小对象</b>才值得。</p>
+        </Interview>
+      </section>
+    </main>
+  </div>
+</BaseLayout>
+
+<style>
+  /* 分代 GC 晋升图 */
+  .gen-diagram { border: 1px solid var(--line); border-radius: 14px; padding: 22px 20px; margin: 16px 0; background: var(--surface); }
+  .gen-row { display: flex; align-items: stretch; gap: 8px; }
+  .gen { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 5px; text-align: center; padding: 16px 10px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .gen0 { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  .gen1 { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .gen2 { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+  .gen-tag { font-family: var(--font-mono); font-size: 12px; font-weight: 700; color: var(--accent-ink); letter-spacing: .5px; }
+  .gen-name { font-family: var(--font-display); font-size: 14px; color: var(--ink); font-weight: 600; }
+  .gen-desc { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+  .promote { flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
+  .promote .arrow { font-family: var(--font-mono); font-size: 12px; color: var(--accent-ink); font-weight: 600; }
+  .promote .promote-lbl { font-size: 10px; color: var(--muted); }
+  .gen-note { margin-top: 14px; font-size: 12.5px; color: var(--graphite); line-height: 1.6; text-align: center; }
+  @media (max-width: 860px) {
+    .gen-row { flex-direction: column; }
+    .promote { flex-direction: row; }
+    .promote .arrow { transform: rotate(90deg); }
+  }
+</style>

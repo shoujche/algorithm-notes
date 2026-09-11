@@ -22,12 +22,12 @@ import { ghBlob } from '../../lib/github';
 
 const chapter = chapters.find((c) => c.slug === 'linked-list')!;
 ---
-<BaseLayout title="链表 Linked List · 算法手记">
+<BaseLayout title="链表 Linked List · 算法与 Python 面试手记" active="algo">
   <div class="layout">
     <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
     <main>
       <div class="hero">
-        <span class="eyebrow">算法手记 / 第 {chapter.num} 章 · 链表 Linked List</span>
+        <span class="eyebrow">算法与 Python 面试手记 / 第 {chapter.num} 章 · 链表 Linked List</span>
         <h2>链表：从<em>指针</em>开始<br />理解数据结构</h2>
         <p>链表是理解「引用 / 指针」最好的起点。这一章从单向、双向结构讲起，用分步动画拆解经典的链表反转，最后用双向链表 + 哈希表实现 O(1) 的 LRU 缓存。每题都配可视化、思路与可运行代码。</p>
         <div class="meta">

@@ -1,0 +1,167 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import Interview from '../../components/Interview.astro';
+import Complexity from '../../components/Complexity.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import { chapters } from '../../data/topics';
+import { mutable, copyDemo, args, defaultArg, closure, duckTyping, CODE_DIR } from '../../data/py-basics-code';
+import { ghBlob } from '../../lib/github';
+
+const chapter = chapters.find((c) => c.slug === 'py-basics')!;
+---
+<BaseLayout title="语言基础 · Python 面试 · 算法与 Python 面试手记" active="python">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Python & Agent / {chapter.num} · 语言基础</span>
+        <h2>语言基础 <em>Language Basics</em>:<br />对象、引用与那些经典陷阱</h2>
+        <p>可变/不可变、is vs ==、深浅拷贝、参数传递、可变默认参数、闭包延迟绑定——这些是 Python 面试开场必问的基本功。共同的底层模型只有一句话:<b>Python 里一切皆对象,变量只是名字(引用)</b>。理解了这句,所有坑都能推导出来。</p>
+        <div class="meta">
+          <div><span class="n">6</span><span class="l">Topics</span></div>
+          <div><span class="n">引用</span><span class="l">核心</span></div>
+          <div><span class="n">id()</span><span class="l">工具</span></div>
+          <div><span class="n">面试</span><span class="l">高频</span></div>
+        </div>
+      </div>
+
+      <!-- 01 可变 vs 不可变 -->
+      <section class="article" id="mutable">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="基础 · Basics" /></div>
+        <h3>可变 vs 不可变</h3>
+        <p class="lead">对象分两类:<b>不可变(immutable)</b> 的 <kbd>int / float / bool / str / tuple / frozenset</kbd>,值不能原地改;<b>可变(mutable)</b> 的 <kbd>list / dict / set</kbd>,可以原地修改内容。判断利器是 <kbd>id()</kbd>——它返回对象身份(CPython 里即内存地址)。</p>
+        <Idea>
+          对不可变对象做「修改」,本质是<b>新建一个对象再让名字指过去</b>,<kbd>id</kbd> 会变;对可变对象做「原地修改」,不换对象,<kbd>id</kbd> 不变。
+          <ol class="steps">
+            <li><b>重新赋值</b>:<kbd>x = x + 1</kbd>、<kbd>s += "a"</kbd> —— 名字指向新对象,<kbd>id</kbd> 变。</li>
+            <li><b>原地修改</b>:<kbd>lst.append(4)</kbd>、<kbd>lst += [5]</kbd> —— 同一对象,<kbd>id</kbd> 不变,所有指向它的名字都会看到变化。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={mutable} lang="python" file="mutable.py" src={ghBlob(`${CODE_DIR}/mutable.py`)} />
+        <Interview q="为什么 tuple 是不可变的,但 (1, [2, 3]) 里的 list 却能改?">
+          <p>tuple 的「不可变」指的是<b>它保存的引用不能变</b>——你不能把第二个元素换成别的对象。但引用指向的那个 <kbd>list</kbd> 本身是可变的,所以 <kbd>t[1].append(4)</kbd> 合法。正因如此,含可变元素的 tuple <b>不可哈希</b>,不能做 dict 的 key。</p>
+        </Interview>
+      </section>
+
+      <!-- 02 is vs == -->
+      <section class="article" id="is-eq">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="base" text="辨析 · Identity" /></div>
+        <h3>is vs ==</h3>
+        <p class="lead"><kbd>is</kbd> 比较<b>身份(identity)</b>——两个名字是不是指向同一个对象,等价于 <kbd>id(a) == id(b)</kbd>;<kbd>==</kbd> 比较<b>值(value)</b>——调用 <kbd>__eq__</kbd> 看内容是否相等。绝大多数时候你想要的是 <kbd>==</kbd>。</p>
+        <Idea>
+          唯一推荐用 <kbd>is</kbd> 的场景是和<b>单例</b>比较:<kbd>x is None</kbd>、<kbd>x is True</kbd>。因为 <kbd>None</kbd> 全局只有一个对象,身份比较又快又准。
+          <ol class="steps">
+            <li><b>小整数池</b>:CPython 预缓存 <kbd>[-5, 256]</kbd> 的整数对象,<kbd>a = 256; a is 256</kbd> 为 <kbd>True</kbd>;而 <kbd>257</kbd> 超出缓存,每次新建,<kbd>is</kbd> 通常为 <kbd>False</kbd>。</li>
+            <li><b>字符串驻留(interning)</b>:形似标识符的短字符串字面量会被驻留复用,<kbd>"ab" is "ab"</kbd> 常为 <kbd>True</kbd>;但这是实现细节,不可依赖。</li>
+          </ol>
+        </Idea>
+        <Interview q="为什么 a = 256 is 256 为 True,而 a = 257 is 257 却是 False?">
+          <p>CPython 启动时会<b>预先创建并缓存 -5 到 256 的整数对象</b>,程序里任何等于这个范围的整数都复用同一个对象,所以 <kbd>is</kbd>(身份相同)为 <kbd>True</kbd>。<kbd>257</kbd> 超出缓存范围,每次求值都<b>新建对象</b>,身份不同,<kbd>is</kbd> 为 <kbd>False</kbd>。但两者的 <kbd>==</kbd> 都是 <kbd>True</kbd>——值永远相等。结论:<b>比较值请用 ==,别用 is</b>。</p>
+        </Interview>
+        <Interview q="is 和 == 什么时候结果不同?">
+          <p>当两个对象<b>值相等但身份不同</b>时:如 <kbd>[1,2] == [1,2]</kbd> 为 <kbd>True</kbd> 但 <kbd>is</kbd> 为 <kbd>False</kbd>(两个独立 list)。反过来,若类重写了 <kbd>__eq__</kbd> 让相等判断恒为 <kbd>False</kbd>,也可能出现同一对象 <kbd>is</kbd> 为 <kbd>True</kbd> 而 <kbd>==</kbd> 为 <kbd>False</kbd>(典型如 <kbd>float('nan')</kbd>:<kbd>x is x</kbd> 为真,<kbd>x == x</kbd> 为假)。</p>
+        </Interview>
+      </section>
+
+      <!-- 03 深浅拷贝 -->
+      <section class="article" id="copy">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="mid" text="拷贝 · Copy" /></div>
+        <h3>深浅拷贝</h3>
+        <p class="lead">赋值(<kbd>=</kbd>)不拷贝,只多一个引用;<b>浅拷贝</b>(<kbd>copy.copy</kbd>、切片 <kbd>[:]</kbd>、<kbd>list()</kbd>)新建外层容器但内部元素仍<b>共享引用</b>;<b>深拷贝</b>(<kbd>copy.deepcopy</kbd>)递归复制,内外完全独立。</p>
+        <Idea>
+          判据只看一层:如果容器里<b>只装不可变元素</b>,浅拷贝就够了(反正内层改不动);一旦有<b>嵌套的可变对象</b>(list 里套 list、dict),浅拷贝改内层会<b>互相污染</b>,必须 <kbd>deepcopy</kbd>。
+        </Idea>
+        <CodeBlock code={copyDemo} lang="python" file="copy_demo.py" src={ghBlob(`${CODE_DIR}/copy_demo.py`)} />
+        <Interview q="deepcopy 遇到循环引用(a 里装着 a 自己)会死循环吗?">
+          <p>不会。<kbd>copy.deepcopy</kbd> 内部用一个 <kbd>memo</kbd> 字典记录「已拷贝过的对象 id → 新对象」,遇到已见过的对象直接返回缓存副本,从而<b>正确处理循环引用</b>,也避免同一对象被复制多份。这也是它比手写递归拷贝更可靠的原因。</p>
+        </Interview>
+      </section>
+
+      <!-- 04 参数传递机制 -->
+      <section class="article" id="args">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="机制 · Semantics" /></div>
+        <h3>参数传递机制</h3>
+        <p class="lead">Python 既不是「传值」也不是 C++ 的「传引用」,而是<b>传对象引用(pass by object reference)</b>:函数拿到的是实参对象的一个引用副本。规则由对象「可变性」决定。</p>
+        <Idea>
+          <ol class="steps">
+            <li>函数内<b>重新赋值</b>参数名(<kbd>x = ...</kbd>)——只改局部引用,外部看不到,不论对象可变与否。</li>
+            <li>函数内<b>原地修改</b>可变对象(<kbd>lst.append(...)</kbd>)——改的是同一对象,外部能看到。</li>
+          </ol>
+          所以「不可变对象传进去改不了外部、可变对象改得了」的表象,统一由这一条推出。
+        </Idea>
+        <CodeBlock code={args} lang="python" file="args.py" src={ghBlob(`${CODE_DIR}/args.py`)} />
+        <Interview q="想让函数修改传入的整数并反映到外部,怎么做?">
+          <p>int 不可变,做不到原地改。变通:<b>返回新值</b>让调用方接收(<kbd>x = f(x)</kbd>);或把它<b>装进可变容器</b>传入(如 <kbd>list</kbd>/<kbd>dict</kbd>/自定义对象),函数改容器内部。本质上是「借助一层可变对象」来间接实现外部可见的修改。</p>
+        </Interview>
+      </section>
+
+      <!-- 05 可变默认参数陷阱 -->
+      <section class="article" id="default-arg">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="hard" text="陷阱 · Gotcha" /></div>
+        <h3>可变默认参数陷阱</h3>
+        <p class="lead">经典大坑:<kbd>def f(x, lst=[])</kbd>。默认值 <kbd>[]</kbd> 只在<b>函数定义时求值一次</b>,之后所有调用<b>共享同一个默认对象</b>。若默认值可变,多次调用会累积,酿成诡异 bug。</p>
+        <Idea>
+          修复方法是用 <kbd>None</kbd> 当哨兵,在函数体内新建:
+          <ol class="steps">
+            <li><b>错误</b>:<kbd>def f(x, lst=[]): lst.append(x); return lst</kbd> —— 第二次调用带着上次的残留。</li>
+            <li><b>正确</b>:<kbd>def f(x, lst=None): if lst is None: lst = [] ...</kbd>,每次调用独立。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={defaultArg} lang="python" file="default_arg.py" src={ghBlob(`${CODE_DIR}/default_arg.py`)} />
+        <Interview q="默认参数到底在什么时候求值?这个坑有没有能用的一面?">
+          <p>默认值在 <kbd>def</kbd> 语句<b>执行(定义)时求值一次</b>,存在函数对象的 <kbd>__defaults__</kbd> 里,而非每次调用时。可利用这一点做<b>缓存/记忆化</b>——故意用可变默认值在多次调用间保存状态(如 <kbd>def f(n, cache={})</kbd>)。但这属于「明知是坑而利用」,可读性差,通常仍推荐 <kbd>None</kbd> 写法。</p>
+        </Interview>
+      </section>
+
+      <!-- 06 闭包与延迟绑定 -->
+      <section class="article" id="closure">
+        <div class="art-head"><span class="num">06</span><LcBadge kind="hard" text="陷阱 · Closure" /></div>
+        <h3>闭包与延迟绑定</h3>
+        <p class="lead">闭包捕获的是<b>变量本身,不是创建闭包时的值</b>(late binding)。循环里造出的多个函数都引用同一个循环变量,等到真正调用时,变量早已是循环结束后的终值,于是它们返回同一结果。</p>
+        <Idea>
+          两种修复,都是想办法在定义时「快照」当前值:
+          <ol class="steps">
+            <li><b>默认参数快照</b>:<kbd>lambda x, i=i: x * i</kbd> —— <kbd>i=i</kbd> 在定义时立即求值,绑定当前值。</li>
+            <li><b>工厂函数</b>:每次调用外层函数产生<b>独立作用域</b>,各自捕获一份 <kbd>i</kbd>。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={closure} lang="python" file="closure.py" src={ghBlob(`${CODE_DIR}/closure.py`)} />
+        <Complexity items={[
+          { l: '延迟绑定', v: '引用变量,非值' },
+          { l: '修复一', v: '默认参数快照' },
+          { l: '修复二', v: '工厂函数作用域' },
+        ]} />
+        <Interview q="为什么闭包不在创建时就把变量的值存下来?这样设计有什么好处?">
+          <p>因为闭包捕获的是<b>变量所在的作用域(cell 对象)</b>,而非某一刻的值——这让闭包能<b>观察到外层变量后续的变化</b>,也支持用 <kbd>nonlocal</kbd> 反向修改外层变量,是实现计数器、状态机等模式的基础。代价就是循环里的延迟绑定坑。理解「捕获的是名字不是值」,就能同时解释好处与陷阱。</p>
+        </Interview>
+      </section>
+
+      <!-- 07 鸭子类型 -->
+      <section class="article" id="duck-typing">
+        <div class="art-head"><span class="num">07</span><LcBadge kind="mid" text="哲学 · Pythonic" /></div>
+        <h3>鸭子类型 Duck Typing</h3>
+        <p class="lead">「如果它走起来像鸭子、叫起来像鸭子,那它就是鸭子。」Python <b>不看对象的类型,只看它有没有你要用的方法/属性</b>——这就是鸭子类型。</p>
+        <Idea>
+          鸭子类型让代码<b>面向行为而非类型</b>:函数不检查 <kbd>isinstance</kbd>,只管调用需要的方法,谁能响应谁就能用。与之配套的是 <b>EAFP</b> 风格。
+          <ol class="steps">
+            <li><b>EAFP</b>(Easier to Ask Forgiveness than Permission):先干,出错再 <kbd>try/except</kbd> 处理——Pythonic。</li>
+            <li><b>LBYL</b>(Look Before You Leap):先 <kbd>hasattr</kbd>/<kbd>if</kbd> 检查再干——啰嗦且有竞态风险。</li>
+            <li><b>Protocol</b>(3.8+):给鸭子类型加静态类型检查(structural typing),兼得灵活与类型安全。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={duckTyping} lang="python" file="duck_typing.py" src={ghBlob(`${CODE_DIR}/duck_typing.py`)} />
+        <Complexity items={[
+          { l: '判据', v: '有没有该方法' },
+          { l: '风格', v: 'EAFP 优先' },
+          { l: '类型检查', v: 'Protocol' },
+        ]} />
+        <Interview q="鸭子类型和抽象基类(ABC)/接口是什么关系?什么时候该用哪个?">
+          <p>鸭子类型是<b>隐式契约</b>(约定方法名,不强制),灵活但错误延后到运行时;<kbd>abc.ABC</kbd> 是<b>显式契约</b>(继承并实现抽象方法,否则实例化就报错),更安全但更死板。小范围、内部代码用鸭子类型即可;对外的框架/插件接口,或想让缺失实现"尽早爆炸",用 ABC 或 <kbd>Protocol</kbd>。<kbd>Protocol</kbd> 是折中:不用继承也能被类型检查器验证。</p>
+        </Interview>
+      </section>
+    </main>
+  </div>
+</BaseLayout>

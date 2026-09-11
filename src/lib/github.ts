@@ -13,3 +13,12 @@ export function ghBlob(repoPath: string): string {
 export function ghTree(repoPath: string): string {
   return `${REPO}/tree/${BRANCH}/${repoPath}`;
 }
+
+/** 新建 issue 链接，可带预填标题 */
+export function ghNewIssue(title?: string): string {
+  const q = title ? `?title=${encodeURIComponent(title)}` : '';
+  return `${REPO}/issues/new${q}`;
+}
+
+/** 仓库首页（用于「提 PR / fork」入口） */
+export const ghRepo = REPO;

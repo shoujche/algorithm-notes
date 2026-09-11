@@ -1,0 +1,129 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import Interview from '../../components/Interview.astro';
+import Complexity from '../../components/Complexity.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import { chapters } from '../../data/topics';
+import { gatherDemo, blockingTrap, CODE_DIR } from '../../data/asyncio-code';
+import { ghBlob } from '../../lib/github';
+
+const chapter = chapters.find((c) => c.slug === 'asyncio')!;
+---
+<BaseLayout title="asyncio 深入 · Python 面试 · 算法与 Python 面试手记" active="python">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Python & Agent / {chapter.num} · asyncio 深入</span>
+        <h2><em>asyncio</em>:单线程如何<br />扛住万级并发</h2>
+        <p>协程是 Agent / FastAPI 高并发的基石。这一章讲清事件循环怎么转、async/await 到底做了什么、gather 如何并发,以及最容易踩的坑——在协程里写阻塞调用。</p>
+        <div class="meta">
+          <div><span class="n">5</span><span class="l">Topics</span></div>
+          <div><span class="n">事件循环</span><span class="l">核心</span></div>
+          <div><span class="n">图解</span><span class="l">调度</span></div>
+          <div><span class="n">面试</span><span class="l">高频</span></div>
+        </div>
+      </div>
+
+      <!-- 01 为什么需要 asyncio -->
+      <section class="article" id="why-async">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="基础 · Basics" /></div>
+        <h3>为什么需要 asyncio</h3>
+        <p class="lead">上一章说 I/O 密集可以用多线程,但线程有上限:每个线程约 <kbd>8MB</kbd> 栈,几千个线程就吃光内存,且切换由 OS 调度、开销不小。<b>协程用单线程 + 事件循环</b>,在一个线程内管理成千上万个「等待中」的任务。</p>
+        <Idea>
+          核心洞察:I/O 密集程序大部分时间在<b>等</b>(等网络、等磁盘)。与其为每个等待开一个线程,不如在一个线程里:谁在等就挂起谁、去跑别的,等好了再回来。这就是<b>协作式并发</b>。
+          <ol class="steps">
+            <li><b>线程</b>:抢占式,OS 决定切换,几千个就到顶。</li>
+            <li><b>协程</b>:协作式,遇 <kbd>await</kbd> 主动让出,轻松上万并发。</li>
+          </ol>
+        </Idea>
+        <Interview q="协程能提升 CPU 密集任务的性能吗?">
+          <p>不能。协程和 GIL 一样是<b>单线程</b>模型,只是把「等待时间」利用起来了。CPU 密集任务没有等待、全程占用 CPU,协程无从切换,反而白搭。CPU 密集仍需<b>多进程</b>,或把计算 <kbd>run_in_executor</kbd> 丢进进程池。</p>
+        </Interview>
+      </section>
+
+      <!-- 02 事件循环 -->
+      <section class="article" id="event-loop">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="mid" text="原理 · Internals" /></div>
+        <h3>事件循环原理</h3>
+        <p class="lead"><b>事件循环(event loop)</b>是 asyncio 的心脏:一个不停转的循环,维护一个「就绪任务队列」,轮流推进每个协程,遇到 <kbd>await</kbd> 就登记回调、切走,直到该任务的 I/O 完成再被唤醒。</p>
+        <div class="loop-diagram">
+          <div class="loop-ring">
+            <div class="loop-node n1">① 取就绪任务</div>
+            <div class="loop-node n2">② 运行到 await</div>
+            <div class="loop-node n3">③ 挂起 + 登记<br/>I/O 回调</div>
+            <div class="loop-node n4">④ I/O 完成<br/>唤醒任务</div>
+            <div class="loop-center">Event<br/>Loop</div>
+          </div>
+          <p class="muted">循环往复:就绪就跑,遇 await 就挂起去跑别的,I/O 好了再唤醒。单线程,永不阻塞在某个等待上。</p>
+        </div>
+        <Interview q="asyncio.run() 背后做了什么?">
+          <p>三件事:①创建一个新的事件循环;②把传入的协程包装成 Task 跑到完成;③收尾——取消未完成任务、关闭循环。所以一个程序通常<b>只调一次</b> <kbd>asyncio.run()</kbd> 作为异步世界的入口,不要嵌套调用。</p>
+        </Interview>
+      </section>
+
+      <!-- 03 协程与 async/await -->
+      <section class="article" id="coroutine">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="mid" text="原理 · Internals" /></div>
+        <h3>协程与 async/await</h3>
+        <p class="lead"><kbd>async def</kbd> 定义的函数,调用它<b>不会立即执行</b>,而是返回一个<b>协程对象</b>;必须交给事件循环(<kbd>await</kbd> 或 <kbd>asyncio.run</kbd>)才会跑。<kbd>await</kbd> 则表示「这里可能要等,先让出控制权」。</p>
+        <Idea>
+          <b>async/await 本质是生成器的语法糖</b>。<kbd>await</kbd> 类似 <kbd>yield</kbd>——把当前执行状态(局部变量、执行位置)保存下来,控制权交回事件循环;等被唤醒时,从 <kbd>await</kbd> 处<b>恢复</b>继续跑。协程能「暂停/恢复」正是靠这套状态机。
+          <ol class="steps">
+            <li><kbd>await</kbd> 只能出现在 <kbd>async def</kbd> 里。</li>
+            <li>被 <kbd>await</kbd> 的对象必须是 <b>awaitable</b>(协程、Task、Future)。</li>
+            <li>忘了 <kbd>await</kbd> 直接调用协程 → 拿到协程对象但不执行,是高频 bug。</li>
+          </ol>
+        </Idea>
+      </section>
+
+      <!-- 04 gather -->
+      <section class="article" id="gather">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="实战 · Concurrency" /></div>
+        <h3>并发:gather</h3>
+        <p class="lead">逐个 <kbd>await</kbd> 是串行(等完一个再下一个);要真正并发,把多个协程交给 <kbd>asyncio.gather()</kbd>,它们会同时推进,总耗时≈最慢的那个。</p>
+        <CodeBlock code={gatherDemo} lang="python" file="gather_demo.py" src={ghBlob(`${CODE_DIR}/gather_demo.py`)} />
+        <Complexity items={[
+          { l: '逐个 await', v: 'Σ 各任务' },
+          { l: 'gather 并发', v: 'max 任务' },
+          { l: '适用', v: '多个独立 I/O' },
+        ]} />
+        <Interview q="gather 和 asyncio.create_task 有什么区别?">
+          <p><kbd>create_task</kbd> 把协程<b>立即</b>调度到事件循环(马上开始跑),返回 Task 句柄,适合「发起后先干别的,稍后再 await」。<kbd>gather</kbd> 是<b>批量并发 + 等全部完成 + 收集结果</b>的便捷封装。要精细控制单个任务(取消、超时)用 create_task;要一把梭并等齐用 gather。</p>
+        </Interview>
+      </section>
+
+      <!-- 05 pitfalls -->
+      <section class="article" id="pitfalls">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="hard" text="陷阱 · Gotcha" /></div>
+        <h3>常见坑:阻塞事件循环</h3>
+        <p class="lead">asyncio 是单线程,事件循环<b>只有一个</b>。一旦某个协程里调用了同步阻塞函数(<kbd>time.sleep</kbd>、同步 <kbd>requests</kbd>、重计算),整个循环被卡死,<b>所有</b>其他协程一起冻结。</p>
+        <CodeBlock code={blockingTrap} lang="python" file="blocking_trap.py" src={ghBlob(`${CODE_DIR}/blocking_trap.py`)} />
+        <Idea>
+          三条铁律:
+          <ol class="steps">
+            <li>用 <kbd>await asyncio.sleep()</kbd> 而非 <kbd>time.sleep()</kbd>。</li>
+            <li>用异步库(<kbd>aiohttp</kbd>/<kbd>httpx.AsyncClient</kbd>)而非同步 <kbd>requests</kbd>。</li>
+            <li>无法避免的阻塞调用(老库、CPU 计算)用 <kbd>loop.run_in_executor()</kbd> 丢到线程/进程池。</li>
+          </ol>
+        </Idea>
+        <Interview q="FastAPI 里为什么不能在 async 路由里写同步阻塞代码?">
+          <p>FastAPI 的 <kbd>async def</kbd> 路由跑在事件循环上,阻塞调用会卡住整个循环,拖垮所有并发请求。对策:要么把路由改成普通 <kbd>def</kbd>(FastAPI 会自动丢到线程池执行),要么在 async 路由里用 <kbd>run_in_executor</kbd>。下一章 FastAPI 会展开讲这个并发模型。</p>
+        </Interview>
+      </section>
+    </main>
+  </div>
+</BaseLayout>
+
+<style>
+  /* 事件循环示意图 */
+  .loop-diagram { border: 1px solid var(--line); border-radius: 14px; padding: 24px; margin: 16px 0; background: var(--surface); }
+  .loop-ring { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; max-width: 520px; margin: 0 auto 8px; }
+  .loop-node { border: 1px solid var(--line-strong); border-radius: 10px; padding: 14px 12px; text-align: center; font-size: 13px; color: var(--graphite); background: #fff; line-height: 1.45; }
+  .loop-node.n1 { border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .loop-center { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 78px; height: 78px; border-radius: 50%; display: flex; align-items: center; justify-content: center; text-align: center; font-family: var(--font-mono); font-size: 12px; font-weight: 700; color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-ink)); box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 35%, transparent); }
+  @media (max-width: 560px) { .loop-ring { grid-template-columns: 1fr; } .loop-center { display: none; } }
+</style>

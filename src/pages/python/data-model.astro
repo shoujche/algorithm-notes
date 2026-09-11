@@ -1,0 +1,162 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import Interview from '../../components/Interview.astro';
+import Complexity from '../../components/Complexity.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import { chapters } from '../../data/topics';
+import { dunder, decorator, generator, contextManager, descriptor, introspection, singleton, CODE_DIR } from '../../data/data-model-code';
+import { ghBlob } from '../../lib/github';
+
+const chapter = chapters.find((c) => c.slug === 'data-model')!;
+---
+<BaseLayout title="数据模型与高级特性 · Python 面试 · 算法与 Python 面试手记" active="python">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Python & Agent / {chapter.num} · 数据模型与高级特性</span>
+        <h2>数据模型 <em>Data Model</em>:<br />用协议驱动的高级特性</h2>
+        <p>Python 的「优雅」来自数据模型:一整套 <kbd>__dunder__</kbd> 协议。这一章串起魔术方法、装饰器、迭代器/生成器、上下文管理器与描述符——它们都是面试高频考点,底层却共享同一套「实现协议即获得能力」的思想。</p>
+        <div class="meta">
+          <div><span class="n">5</span><span class="l">Topics</span></div>
+          <div><span class="n">协议</span><span class="l">核心</span></div>
+          <div><span class="n">dunder</span><span class="l">数据模型</span></div>
+          <div><span class="n">面试</span><span class="l">高频</span></div>
+        </div>
+      </div>
+
+      <!-- 01 魔术方法 -->
+      <section class="article" id="dunder">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="基础 · Basics" /></div>
+        <h3>魔术方法与数据模型</h3>
+        <p class="lead">Python 用 <b><kbd>__dunder__</kbd>(double underscore)协议</b>实现运算符重载和内置函数支持:你实现 <kbd>__len__</kbd>,<kbd>len(obj)</kbd> 就能用;实现 <kbd>__add__</kbd>,<kbd>+</kbd> 就能用。语言把「怎么做」的钩子交给你。</p>
+        <Idea>
+          内置函数与运算符本质是「查找并调用对应的魔术方法」。<kbd>len(x)</kbd> 实际调用 <kbd>type(x).__len__(x)</kbd>,<kbd>a + b</kbd> 实际调用 <kbd>type(a).__add__(a, b)</kbd>。这就是 Python 的<b>数据模型(Data Model)</b>。
+          <ol class="steps">
+            <li><b>__repr__ vs __str__</b>:前者给开发者(可复现),后者给用户(可读);缺 __str__ 时 print 退回 __repr__。</li>
+            <li><b>__eq__ 与 __hash__</b>:自定义 __eq__ 后对象默认变不可哈希,若要放进 set/dict key 需一并实现 __hash__。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={dunder} lang="python" file="dunder.py" src={ghBlob(`${CODE_DIR}/dunder.py`)} />
+        <Interview q="__repr__ 和 __str__ 有什么区别?只实现一个该选哪个?">
+          <p><kbd>__repr__</kbd> 面向调试,目标是<b>无歧义、尽量可 eval 复现</b>;<kbd>__str__</kbd> 面向终端用户,目标是<b>可读</b>。若只实现一个,选 <kbd>__repr__</kbd>——因为 <kbd>__str__</kbd> 缺省时会回退到它,而容器打印元素、交互式回显用的也是 <kbd>__repr__</kbd>。</p>
+        </Interview>
+      </section>
+
+      <!-- 02 装饰器 -->
+      <section class="article" id="decorator">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="mid" text="进阶 · Advanced" /></div>
+        <h3>装饰器</h3>
+        <p class="lead">装饰器是<b>「接收函数、返回函数」的高阶函数</b>,<kbd>@deco</kbd> 只是 <kbd>func = deco(func)</kbd> 的语法糖。它让你在不改原函数代码的前提下增强行为——日志、计时、缓存、重试、鉴权。</p>
+        <Idea>
+          三种形态,层层套娃:
+          <ol class="steps">
+            <li><b>基础装饰器</b>:一层 wrapper,用 <kbd>*args/**kwargs</kbd> 透传参数。</li>
+            <li><b>带参数装饰器</b>:三层——最外层收装饰器参数,返回真正的装饰器。</li>
+            <li><b>类装饰器</b>:用类的 <kbd>__call__</kbd> 让实例可调用,天然能保存状态(如计数)。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={decorator} lang="python" file="decorator.py" src={ghBlob(`${CODE_DIR}/decorator.py`)} />
+        <Interview q="装饰器为什么一定要加 functools.wraps?">
+          <p>因为 wrapper 会「顶替」原函数,导致 <kbd>func.__name__</kbd> 变成 <kbd>'wrapper'</kbd>、<kbd>__doc__</kbd> 丢失、<kbd>__wrapped__</kbd> 断链,影响调试、日志和依赖签名的框架(如 FastAPI)。<kbd>functools.wraps</kbd> 把原函数的元信息拷回 wrapper,保持「装饰后仍像原函数」。</p>
+        </Interview>
+      </section>
+
+      <!-- 03 迭代器与生成器 -->
+      <section class="article" id="iterator">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="mid" text="进阶 · Advanced" /></div>
+        <h3>迭代器与生成器</h3>
+        <p class="lead"><b>可迭代对象</b>实现 <kbd>__iter__</kbd>;<b>迭代器</b>再实现 <kbd>__next__</kbd> 并用 <kbd>StopIteration</kbd> 收尾;<b>生成器</b>是用 <kbd>yield</kbd> 写的函数,自动满足迭代器协议。生成器的杀手锏是<b>惰性求值、省内存</b>。</p>
+        <Idea>
+          <kbd>for x in obj</kbd> 的展开:先 <kbd>iter(obj)</kbd> 拿到迭代器,再反复 <kbd>next()</kbd> 取值,捕获 <kbd>StopIteration</kbd> 时结束。生成器函数一遇 <kbd>yield</kbd> 就<b>暂停并保存栈帧</b>,下次从暂停点续跑——这让它能表达无限序列、也让内存占用恒定。
+        </Idea>
+        <CodeBlock code={generator} lang="python" file="generator.py" src={ghBlob(`${CODE_DIR}/generator.py`)} />
+        <Complexity items={[
+          { l: '列表推导', v: '一次物化 · O(n) 内存' },
+          { l: '生成器', v: '惰性 · O(1) 内存' },
+          { l: '判据', v: '是否需重复遍历' },
+        ]} />
+        <Interview q="生成器和迭代器的区别?yield from 有什么用?">
+          <p><b>迭代器</b>是实现了 <kbd>__iter__/__next__</kbd> 的对象,是更宽的概念;<b>生成器</b>是「用 <kbd>yield</kbd> 自动生成的迭代器」,是它的一种便捷实现——所有生成器都是迭代器,反之不然。<kbd>yield from it</kbd> 把子可迭代对象的值<b>逐个透传</b>,等价于 <kbd>for x in it: yield x</kbd>,还能转发 <kbd>send/throw</kbd>,是组合生成器与协程委托的基础。</p>
+        </Interview>
+      </section>
+
+      <!-- 04 上下文管理器 -->
+      <section class="article" id="context">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="进阶 · Advanced" /></div>
+        <h3>上下文管理器:with 原理</h3>
+        <p class="lead"><kbd>with</kbd> 的本质:进入时调用 <kbd>__enter__</kbd>,离开时(无论正常还是抛异常)调用 <kbd>__exit__</kbd>。它保证资源<b>一定被释放</b>——文件关闭、锁释放、连接归还都靠它兜底。</p>
+        <Idea>
+          两种等价写法:
+          <ol class="steps">
+            <li><b>类协议</b>:实现 <kbd>__enter__</kbd>(返回值给 <kbd>as</kbd> 变量)与 <kbd>__exit__(exc_type, exc_val, exc_tb)</kbd>。</li>
+            <li><b>生成器写法</b>:<kbd>@contextlib.contextmanager</kbd> 装饰生成器,<kbd>yield</kbd> 之前是进入逻辑,<kbd>finally</kbd> 里是退出逻辑。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={contextManager} lang="python" file="context_manager.py" src={ghBlob(`${CODE_DIR}/context_manager.py`)} />
+        <Interview q="__exit__ 返回 True 会怎样?with 里抛异常还会执行清理吗?">
+          <p><kbd>__exit__</kbd> 返回 <b>True 会「吞掉」块内异常</b>(不再向上抛),返回 <kbd>False/None</kbd> 则异常继续传播。无论块内是否异常,<kbd>__exit__</kbd> <b>都会被执行</b>——这正是它比 <kbd>try/finally</kbd> 更省心的地方;异常信息通过 <kbd>exc_type/exc_val/exc_tb</kbd> 三个参数传入,可据此做区分处理。</p>
+        </Interview>
+      </section>
+
+      <!-- 05 描述符与 property -->
+      <section class="article" id="descriptor">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="hard" text="深入 · Deep" /></div>
+        <h3>描述符与 property</h3>
+        <p class="lead">描述符是<b>实现了 <kbd>__get__/__set__/__delete__</kbd> 的类</b>。当它作为另一个类的类属性时,对该属性的读写会被这些方法接管。它是 <kbd>property</kbd>、<kbd>classmethod</kbd>、ORM 字段的底层机制。</p>
+        <Idea>
+          <b>property 本质就是一个数据描述符</b>——它把 getter/setter 封装成实现了 <kbd>__get__/__set__</kbd> 的对象。
+          <ol class="steps">
+            <li><b>数据描述符</b>:有 <kbd>__set__</kbd>/<kbd>__delete__</kbd>,优先级高于实例 <kbd>__dict__</kbd>(所以能拦截赋值)。</li>
+            <li><b>非数据描述符</b>:只有 <kbd>__get__</kbd>(如函数、staticmethod),优先级低于实例属性。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={descriptor} lang="python" file="descriptor.py" src={ghBlob(`${CODE_DIR}/descriptor.py`)} />
+        <Interview q="property 和描述符是什么关系?什么时候该用描述符而非 property?">
+          <p><kbd>property</kbd> 是描述符的<b>便捷封装</b>——用它给<b>单个属性</b>加 getter/setter 最省事。但当同一套「校验/转换」逻辑要<b>复用到多个属性、多个类</b>时,<kbd>property</kbd> 会重复啰嗦,此时抽成一个描述符类(如上面的 <kbd>Positive</kbd>),声明式地写 <kbd>balance = Positive()</kbd> 即可,这正是 ORM 字段的做法。</p>
+        </Interview>
+      </section>
+
+      <!-- 06 自省与反射 -->
+      <section class="article" id="introspection">
+        <div class="art-head"><span class="num">06</span><LcBadge kind="mid" text="进阶 · Advanced" /></div>
+        <h3>自省与反射</h3>
+        <p class="lead">自省(introspection)指程序在<b>运行时检查对象类型与结构</b>的能力,反射(reflection)进一步指<b>运行时动态读写属性、调用方法</b>。Python 把一切都当对象,自省几乎无处不在——调试器、序列化、ORM、依赖注入框架全靠它。</p>
+        <Idea>
+          常用工具串成一条链:<kbd>type()</kbd> 看类型,<kbd>isinstance()</kbd> 判继承,<kbd>dir()</kbd> 列成员,<kbd>__dict__</kbd> 看实例属性,<kbd>getattr/setattr/hasattr</kbd> 动态存取,<kbd>inspect</kbd> 模块拿签名与源码。
+          <ol class="steps">
+            <li><b>getattr(obj, name, default)</b>:按<b>字符串名</b>取属性/方法,是「反射调用」的核心——把方法名当数据来分发。</li>
+            <li><b>__dict__ vs dir()</b>:前者只含<b>实例自身</b>的属性,后者含类与继承链上的<b>全部可访问名</b>。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={introspection} lang="python" file="introspection.py" src={ghBlob(`${CODE_DIR}/introspection.py`)} />
+        <Interview q="getattr/setattr 有什么实际用途?和直接点号访问有何区别?">
+          <p>点号访问要求属性名在<b>编码时已知且写死</b>;<kbd>getattr(obj, name)</kbd> 的 <kbd>name</kbd> 是<b>运行时的字符串</b>,可来自配置、请求参数、循环变量。因此凡是「按名字动态分发」的场景——插件系统按 <kbd>getattr(handler, f'do_&#123;cmd&#125;')</kbd> 找处理函数、序列化框架遍历字段名读值——都离不开它。区别本质是<b>静态绑定 vs 动态绑定</b>。</p>
+        </Interview>
+      </section>
+
+      <!-- 07 单例模式 -->
+      <section class="article" id="singleton">
+        <div class="art-head"><span class="num">07</span><LcBadge kind="hard" text="深入 · Deep" /></div>
+        <h3>单例模式</h3>
+        <p class="lead">单例(Singleton)保证一个类<b>全局只有一个实例</b>,常用于配置、连接池、日志器。Python 里有多种实现路径,各自拦截「创建实例」的不同环节;并发下还需加锁避免<b>竞态创建出两个实例</b>。</p>
+        <Idea>
+          三种典型实现,拦截点不同:
+          <ol class="steps">
+            <li><b>装饰器版</b>:用闭包缓存实例,<kbd>@singleton</kbd> 装饰类,调用时命中缓存则复用——最贴近业务、侵入最小。</li>
+            <li><b>__new__ 版</b>:重写 <kbd>__new__</kbd> 在<b>对象分配阶段</b>拦截,是最「原生」的写法。</li>
+            <li><b>元类版</b>:用 metaclass 的 <kbd>__call__</kbd> 统管所有实例化,可让<b>多个类共享</b>单例逻辑。</li>
+          </ol>
+          三者都用 <kbd>threading.Lock</kbd> + <b>双重检查锁定(double-checked locking)</b>抵御多线程竞态。
+        </Idea>
+        <CodeBlock code={singleton} lang="python" file="singleton.py" src={ghBlob(`${CODE_DIR}/singleton.py`)} />
+        <Interview q="单例为什么要双重检查锁定?模块级单例又是怎么回事?">
+          <p>只在锁外判一次会有<b>竞态</b>:两个线程同时看到「未创建」,先后都进临界区各造一个。双重检查是<b>锁外判一次(快路径,避开加锁开销)、锁内再判一次(保证唯一)</b>。而 Python 的<b>模块本身就是天然单例</b>——模块首次 import 时执行一次并被缓存到 <kbd>sys.modules</kbd>,之后 import 直接返回缓存,所以「在模块里建一个对象、别处 import 它」是最简单可靠的单例,无需任何锁。</p>
+        </Interview>
+      </section>
+    </main>
+  </div>
+</BaseLayout>

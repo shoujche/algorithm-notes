@@ -1,47 +1,58 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
-import { chapters } from '../data/topics';
+import { chapters, algoChapters, pythonChapters, categoryMeta } from '../data/topics';
 import { withBase } from '../lib/url';
+
+const groups = [
+  { key: 'algo' as const, list: algoChapters, hrefBase: 'topics' },
+  { key: 'python' as const, list: pythonChapters, hrefBase: 'python' },
+];
 ---
-<BaseLayout title="算法手记 Algo Notes · 图解数据结构与算法">
+<BaseLayout title="算法与 Python 面试手记 Interview Notes · 图解数据结构与算法 + Python 面试">
   <div class="home-wrap">
     <div class="hero">
-      <span class="eyebrow">算法手记 · Algo Notes</span>
-      <h2>图解<em>数据结构</em>与算法</h2>
-      <p>从零开始记录数据结构与算法的学习，用分步动画拆解每一道经典 LeetCode 题——把「指针怎么走、缓存怎么淘汰」画出来。既是我的学习手记，也希望帮到同样在刷题的你。</p>
+      <span class="eyebrow">算法与 Python 面试手记 · Interview Notes</span>
+      <h2>图解<em>数据结构</em>与算法 · <em>Python</em> 面试</h2>
+      <p>从零开始记录数据结构与算法的学习，用分步动画拆解经典 LeetCode 题；并汇总 Python 语言、并发/GIL、asyncio、FastAPI 与 Agent 工程的面试知识。既是我的学习手记，也希望帮到同样在准备的你。</p>
       <div class="meta">
-        <div><span class="n">{chapters.length}</span><span class="l">Chapters</span></div>
+        <div><span class="n">{algoChapters.length}</span><span class="l">Algorithms</span></div>
+        <div><span class="n">{pythonChapters.length}</span><span class="l">Python</span></div>
         <div><span class="n">动画</span><span class="l">Visual</span></div>
-        <div><span class="n">Python</span><span class="l">Language</span></div>
         <div><span class="n">开源</span><span class="l">Open Source</span></div>
       </div>
     </div>
 
-    <h4 class="sub" style="margin-top:0">章节目录 · Chapters</h4>
-    <div class="topic-grid">
-      {chapters.map((c) => (
-        c.ready ? (
-          <a class="topic-card" href={withBase(`/topics/${c.slug}`)}>
-            <span class="tnum">CH.{c.num}</span>
-            <h3>{c.cn}</h3>
-            <span class="ten">{c.en}</span>
-            <p>{c.summary}</p>
-            <div class="go">阅读章节 →</div>
-          </a>
-        ) : (
-          <div class="topic-card soon">
-            <span class="tnum">CH.{c.num}</span>
-            <h3>{c.cn}</h3>
-            <span class="ten">{c.en}</span>
-            <p>{c.summary}</p>
-            <div class="go"><span class="badge-soon">规划中 Soon</span></div>
-          </div>
-        )
-      ))}
-    </div>
+    {groups.map((g) => (
+      <section id={g.key} class="cat-block">
+        <h4 class="sub">{categoryMeta[g.key].cn} · {categoryMeta[g.key].en}</h4>
+        <div class="topic-grid">
+          {g.list.map((c) => (
+            c.ready ? (
+              <a class="topic-card" href={withBase(`/${g.hrefBase}/${c.slug}`)}>
+                <span class="tnum">CH.{c.num}</span>
+                <h3>{c.cn}</h3>
+                <span class="ten">{c.en}</span>
+                <p>{c.summary}</p>
+                <div class="go">阅读章节 →</div>
+              </a>
+            ) : (
+              <div class="topic-card soon">
+                <span class="tnum">CH.{c.num}</span>
+                <h3>{c.cn}</h3>
+                <span class="ten">{c.en}</span>
+                <p>{c.summary}</p>
+                <div class="go"><span class="badge-soon">规划中 Soon</span></div>
+              </div>
+            )
+          ))}
+        </div>
+      </section>
+    ))}
   </div>
 </BaseLayout>
 
 <style>
   .home-wrap { max-width: 1180px; margin: 0 auto; padding: 34px 30px; }
+  .cat-block { margin-top: 8px; scroll-margin-top: 88px; }
+  .cat-block + .cat-block { margin-top: 40px; }
 </style>

@@ -1,16 +1,50 @@
 ---
 import { withBase } from '../lib/url';
+import { ghNewIssue, ghRepo } from '../lib/github';
+interface Props { active?: 'algo' | 'python' }
+const { active } = Astro.props;
 ---
 <header class="top">
   <a class="brand" href={withBase('/')}>
     <div class="logo">AN</div>
     <div>
-      <h1>算法手记</h1>
-      <div class="sub">ALGO NOTES · 图解数据结构与算法</div>
+      <h1>算法与 Python 面试手记</h1>
+      <div class="sub">INTERVIEW NOTES · 图解算法 + Python 面试</div>
     </div>
   </a>
+  <nav class="mainnav">
+    <a class={active === 'algo' ? 'cur' : ''} href={withBase('/#algo')}>算法</a>
+    <a class={active === 'python' ? 'cur' : ''} href={withBase('/#python')}>Python 面试</a>
+  </nav>
   <div class="right">
-    <a class="pill" href="https://github.com/shoujche" target="_blank" rel="noopener noreferrer">shawn</a>
-    <a class="pill" href="https://github.com/shoujche" target="_blank" rel="noopener noreferrer">GitHub ↗</a>
+    <a class="pill feedback" href={ghNewIssue('[题目反馈] ')} target="_blank" rel="noopener noreferrer" title="题目有误或想推荐更好的题？去 GitHub 提 issue">
+      <span class="ic" aria-hidden="true">✎</span>纠错 / 荐题
+    </a>
+    <a class="pill" href={ghRepo} target="_blank" rel="noopener noreferrer">GitHub ↗</a>
   </div>
 </header>
+
+<style>
+  .mainnav { display: flex; align-items: center; gap: 4px; }
+  .mainnav a {
+    font-family: var(--font-display); font-size: 14px; font-weight: 500;
+    padding: 6px 14px; border-radius: 9px; color: var(--muted);
+    transition: color .15s, background .15s;
+  }
+  .mainnav a:hover { color: var(--fg); }
+  .mainnav a.cur { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  @media (max-width: 720px) { .mainnav { display: none; } }
+
+  .pill.feedback {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: #fff;
+    background: var(--accent, #3b6cff);
+    border-color: var(--accent, #3b6cff);
+    font-weight: 600;
+  }
+  .pill.feedback:hover { filter: brightness(1.06); }
+  .pill.feedback .ic { font-size: 13px; line-height: 1; }
+  @media (max-width: 520px) {
+    .pill.feedback .ic { margin: 0; }
+  }
+</style>

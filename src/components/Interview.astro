@@ -1,0 +1,47 @@
+---
+// 面试追问框：默认折叠，点开看追问点 + 简答。用 slot 承载富文本。
+interface Props { q: string }
+const { q } = Astro.props;
+---
+<details class="interview">
+  <summary>
+    <span class="tag">面试追问</span>
+    <span class="q">{q}</span>
+    <span class="chev" aria-hidden="true">▾</span>
+  </summary>
+  <div class="ans"><slot /></div>
+</details>
+
+<style>
+  .interview {
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--teal, #2AA9A0);
+    border-radius: 10px;
+    background: var(--surface);
+    margin: 14px 0;
+    overflow: hidden;
+  }
+  .interview > summary {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px; cursor: pointer; list-style: none;
+    font-size: 14.5px; color: var(--ink);
+  }
+  .interview > summary::-webkit-details-marker { display: none; }
+  .interview .tag {
+    flex: none; font-family: var(--font-mono); font-size: 10.5px; font-weight: 600;
+    letter-spacing: .4px; text-transform: uppercase;
+    color: var(--teal, #2AA9A0);
+    border: 1px solid color-mix(in srgb, var(--teal, #2AA9A0) 40%, transparent);
+    background: color-mix(in srgb, var(--teal, #2AA9A0) 8%, transparent);
+    padding: 3px 8px; border-radius: 6px;
+  }
+  .interview .q { flex: 1; font-weight: 500; }
+  .interview .chev { flex: none; color: var(--muted); transition: transform .18s; }
+  .interview[open] .chev { transform: rotate(180deg); }
+  .interview .ans {
+    padding: 0 16px 14px 16px; color: var(--graphite);
+    font-size: 14.5px; line-height: 1.7;
+  }
+  .interview .ans :global(p) { margin: 8px 0; }
+  .interview .ans :global(b) { color: var(--accent-ink); }
+</style>

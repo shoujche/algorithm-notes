@@ -1,0 +1,150 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import Interview from '../../components/Interview.astro';
+import Complexity from '../../components/Complexity.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import { chapters } from '../../data/topics';
+import { decorators, lruCache, rateLimiter, asyncPool, toolLoop, CODE_DIR } from '../../data/hands-on-code';
+import { ghBlob } from '../../lib/github';
+
+const chapter = chapters.find((c) => c.slug === 'hands-on')!;
+---
+<BaseLayout title="实战手撕 · Python 面试 · 算法与 Python 面试手记" active="python">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Python & Agent / {chapter.num} · 实战手撕</span>
+        <h2>实战 <em>手撕</em>：<br />面试白板上要现写的那几道</h2>
+        <p>这一章是纯手写代码题：计时/重试装饰器、O(1) 的 LRU 缓存、异步限流器、并发池、简易 tool-calling loop。每题都给面试官口吻的题面、思路要点与可直接运行的标准答案，末尾附高频追问。</p>
+        <div class="meta">
+          <div><span class="n">5</span><span class="l">手撕题</span></div>
+          <div><span class="n">可运行</span><span class="l">.py</span></div>
+          <div><span class="n">O(1)</span><span class="l">LRU</span></div>
+          <div><span class="n">async</span><span class="l">并发</span></div>
+        </div>
+      </div>
+
+      <!-- 01 装饰器 -->
+      <section class="article" id="timer-decorator">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="mid" text="中等 · Decorator" /></div>
+        <h3>手写计时 / 重试 / 缓存装饰器</h3>
+        <p class="lead">「写一个 <kbd>retry</kbd> 装饰器,支持指定重试次数和每次的延迟;再写一个 <kbd>timer</kbd> 打印函数耗时。要求装饰后函数的 <kbd>__name__</kbd> 不能变。」——这是几乎每场 Python 面试都会摸一摸的手感题。</p>
+        <Idea>
+          装饰器本质是<b>「接收函数、返回函数」的高阶函数</b>。三个关键点:
+          <ol class="steps">
+            <li><b>必须用 <kbd>functools.wraps</kbd></b>:否则包裹后 <kbd>__name__</kbd> 变成 <kbd>wrapper</kbd>,日志、文档、调试全乱。</li>
+            <li><b>带参数的装饰器 = 三层嵌套</b>:参数层 → 装饰层 → 包裹层,多套一层闭包接收参数。</li>
+            <li><b>耗时统计放 <kbd>finally</kbd></b>:函数抛异常也能打印;重试要保留最后一次异常再抛出。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={decorators} lang="python" file="decorators.py" src={ghBlob(`${CODE_DIR}/decorators.py`)} />
+        <Interview q="不用 functools.wraps 会怎样?它到底做了什么?">
+          <p>不用的话,被装饰函数的 <kbd>__name__</kbd>、<kbd>__doc__</kbd>、<kbd>__module__</kbd>、<kbd>__wrapped__</kbd> 等都会变成内层 <kbd>wrapper</kbd> 的值。<kbd>wraps</kbd> 本身就是一个装饰器(基于 <kbd>functools.update_wrapper</kbd>),把原函数的这些元信息<b>拷贝到 wrapper 上</b>,让被装饰函数「对外看起来还是原来那个」。它还会设置 <kbd>__wrapped__</kbd> 指向原函数,方便解包。</p>
+        </Interview>
+        <Interview q="带参数和不带参数的装饰器,写法差在哪?">
+          <p>不带参数时 <kbd>@timer</kbd> 直接把函数传给 <kbd>timer(func)</kbd>,两层即可。带参数时 <kbd>@retry(times=3)</kbd> 是<b>先调用 <kbd>retry(times=3)</kbd> 返回一个真正的装饰器</b>,再用它去装饰函数,所以要三层。想同时兼容两种用法,可判断第一个参数是否 callable 或用 <kbd>functools.partial</kbd>。</p>
+        </Interview>
+      </section>
+
+      <!-- 02 LRU -->
+      <section class="article" id="lru">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="hard" text="困难 · LC 146" /></div>
+        <h3>手写 LRU 缓存(get / put 均 O(1))</h3>
+        <p class="lead">「实现一个 LRU 缓存,支持 <kbd>get</kbd> 和 <kbd>put</kbd>,容量满时淘汰最久未使用的条目。<b>两个操作都要 O(1)</b>。」——LeetCode 146,大厂现场高频。</p>
+        <Idea>
+          O(1) 的约束逼你同时满足两件事:
+          <ol class="steps">
+            <li><b>按 key 查值要 O(1)</b> → 用 <kbd>dict</kbd>(哈希表)。</li>
+            <li><b>维护访问顺序、淘汰最旧要 O(1)</b> → 用<b>双向链表</b>:命中节点 O(1) 摘除再插到头部;淘汰时直接删尾。</li>
+          </ol>
+          工程里直接用 <kbd>OrderedDict</kbd>(它内部正是 dict+双向链表),但面试常要你手写链表版本证明功底。两版都给。
+        </Idea>
+        <CodeBlock code={lruCache} lang="python" file="lru_cache.py" src={ghBlob(`${CODE_DIR}/lru_cache.py`)} />
+        <Complexity items={[
+          { l: 'get', v: 'O(1)' },
+          { l: 'put', v: 'O(1)' },
+          { l: '空间', v: 'O(capacity)' },
+        ]} />
+        <Interview q="LRU 为什么必须用双向链表,单链表不行吗?">
+          <p>命中某节点时要把它<b>从当前位置摘下</b>再移到头部。单链表删除节点需要知道<b>前驱</b>,而从 dict 拿到的是节点本身,找前驱要 O(n) 遍历。双向链表每个节点存 <kbd>prev</kbd>,摘除是纯指针操作 O(1)。再加<b>头尾哨兵节点</b>省去空链表和头尾的边界判断。</p>
+        </Interview>
+        <Interview q="节点里为什么要同时存 key 和 value?只存 value 不行?">
+          <p>不行。淘汰时我们从链表尾部拿到最旧的<b>节点</b>,但还要去 <kbd>dict</kbd> 里把对应条目删掉——这就需要知道它的 <kbd>key</kbd>。如果节点只存 value,就无法反查 dict 的键,删不掉会内存泄漏。所以节点必须携带 key。</p>
+        </Interview>
+      </section>
+
+      <!-- 03 rate limiter -->
+      <section class="article" id="rate-limiter">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="hard" text="困难 · Async" /></div>
+        <h3>异步限流器(令牌桶)</h3>
+        <p class="lead">「用 asyncio 写一个限流器,限制每秒最多放行 N 个请求,超了就异步等待,<b>不能阻塞事件循环</b>。」——考异步 + 限流算法的综合题。</p>
+        <Idea>
+          令牌桶(Token Bucket):以固定速率 <kbd>rate</kbd> 往桶里放令牌,请求取到令牌才放行。
+          <ol class="steps">
+            <li><b>惰性补充</b>:不用后台定时器,每次 acquire 时按「距上次的时间差 × rate」补令牌,上限为容量。</li>
+            <li><b>不够就异步等</b>:算出还差多少令牌、需等多久,用 <kbd>await asyncio.sleep</kbd> 让出事件循环。</li>
+            <li><b>sleep 要在锁外</b>:占着 <kbd>asyncio.Lock</kbd> 睡觉会把其他协程全卡死。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={rateLimiter} lang="python" file="rate_limiter.py" src={ghBlob(`${CODE_DIR}/rate_limiter.py`)} />
+        <Interview q="令牌桶 vs 漏桶,区别是什么?各适合什么场景?">
+          <p><b>令牌桶</b>:匀速放令牌,桶能<b>攒</b>令牌,所以允许<b>突发流量</b>(攒满可瞬间放行一批),平时又能限住平均速率——适合大多数 API 限流。<b>漏桶</b>:请求以固定速率<b>流出</b>,强制平滑,<b>不允许突发</b>,超出的直接排队或丢弃——适合需要严格恒定速率的场景(如整流下游)。一句话:令牌桶限平均+容突发,漏桶限瞬时+强平滑。</p>
+        </Interview>
+        <Interview q="限流(令牌桶)和限并发(Semaphore)是一回事吗?">
+          <p>不是,常被混淆。<b>令牌桶控制速率</b>(单位时间放行几个,QPS);<b>Semaphore 控制并发度</b>(同一时刻有几个在跑,与耗时相关)。比如「10 QPS」和「同时最多 3 个」是两个正交维度:一个慢请求可能占着并发额度很久却只算一次速率。生产中常两者叠加使用。</p>
+        </Interview>
+      </section>
+
+      <!-- 04 async pool -->
+      <section class="article" id="async-pool">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="中等 · Async" /></div>
+        <h3>异步并发池(限制最大并发数)</h3>
+        <p class="lead">「有 100 个 URL 要异步抓取,但同一时刻最多只能有 3 个请求在跑。写个函数并发执行并按原顺序返回结果。」——asyncio 的实战必考。</p>
+        <Idea>
+          <kbd>asyncio.Semaphore(N)</kbd> = 最多 N 个协程能同时进入临界区,其余自动排队。
+          <ol class="steps">
+            <li>用 <kbd>async with sem</kbd> 包住任务体,「获取」与「释放」自动配对。</li>
+            <li>把每个协程都套上信号量,再交给 <kbd>asyncio.gather</kbd> 一起跑。</li>
+            <li><kbd>gather</kbd> 返回结果的顺序 = <b>传入顺序</b>,与完成先后无关,天然对齐。</li>
+          </ol>
+          Python 3.11+ 可用 <kbd>asyncio.TaskGroup</kbd>(结构化并发):任一子任务异常会自动取消其余任务,更安全。
+        </Idea>
+        <CodeBlock code={asyncPool} lang="python" file="async_pool.py" src={ghBlob(`${CODE_DIR}/async_pool.py`)} />
+        <Interview q="为什么不直接 gather 全部 100 个,非要加 Semaphore?">
+          <p>裸 <kbd>gather</kbd> 会<b>一次性</b>把 100 个协程全部启动,瞬间打出 100 个并发连接:可能打爆对端(触发对方限流/封禁)、耗尽本地文件描述符或内存。Semaphore 把「同时在跑」压到可控上限,既并发又不失控。这是 <kbd>gather</kbd> + 限并发的标准配方。</p>
+        </Interview>
+        <Interview q="gather 里某个任务抛异常了,其他任务会怎样?">
+          <p>默认 <kbd>gather</kbd> 遇到第一个异常就<b>立即向上抛出</b>,但其余任务<b>仍在后台继续跑</b>(不会自动取消),容易留下悬挂任务。想收集全部(含异常)用 <kbd>return_exceptions=True</kbd>;想「一个失败全部取消」用 <kbd>TaskGroup</kbd>,它会自动取消同组其他任务并汇总异常。</p>
+        </Interview>
+      </section>
+
+      <!-- 05 tool loop -->
+      <section class="article" id="tool-loop">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="hard" text="困难 · Agent" /></div>
+        <h3>简易 tool-calling loop</h3>
+        <p class="lead">「不用任何 Agent 框架,手写一个最小的 tool-calling 循环:LLM 要么直接回答,要么要求调工具;你执行工具、把结果喂回去,直到拿到最终答案。」——呼应 Agent 章,考对 tool calling 协议的理解。</p>
+        <Idea>
+          Agent 的本质就是一个 <kbd>while</kbd> 循环:
+          <ol class="steps">
+            <li>把<b>对话历史 + 工具描述(JSON Schema)</b>发给 LLM。</li>
+            <li>LLM 返回:要么 <kbd>content</kbd>(最终答案,退出),要么 <kbd>tool_calls</kbd>(要求调工具)。</li>
+            <li>本地执行工具,把结果以 <kbd>role="tool"</kbd> 并带 <kbd>tool_call_id</kbd> 塞回历史。</li>
+            <li>回到第 1 步再问一次,直到 LLM 给出最终答案。用 <kbd>max_turns</kbd> 兜底防死循环。</li>
+          </ol>
+          下例用假 LLM 驱动,逻辑与真实 OpenAI SDK 完全同构,换掉 <kbd>fake_llm</kbd> 即可接真实模型。
+        </Idea>
+        <CodeBlock code={toolLoop} lang="python" file="tool_loop.py" src={ghBlob(`${CODE_DIR}/tool_loop.py`)} />
+        <Interview q="工具执行结果为什么要带 tool_call_id 塞回去?">
+          <p>因为一轮里 LLM 可能<b>同时要求调多个工具</b>(parallel tool calls),每个 <kbd>tool_call</kbd> 有唯一 <kbd>id</kbd>。回填结果时用 <kbd>role="tool"</kbd> 消息带上对应的 <kbd>tool_call_id</kbd>,LLM 才能把「哪个结果对应哪次调用」一一对上。少了 id 或对不上,协议就乱了。</p>
+        </Interview>
+        <Interview q="这个 while 循环为什么一定要设 max_turns 上限?">
+          <p>防止<b>无限循环</b>:模型可能反复要求调工具却始终不给最终答案(工具报错、参数不对、模型钻牛角尖),没有上限就会一直烧 token / 打 API。<kbd>max_turns</kbd> 是必备的安全阀,达到上限就中止并返回兜底信息。生产里还会叠加超时、总 token 预算等多重护栏。</p>
+        </Interview>
+      </section>
+    </main>
+  </div>
+</BaseLayout>

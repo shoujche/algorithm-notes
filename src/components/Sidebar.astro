@@ -1,6 +1,6 @@
 ---
 import type { Section } from '../data/topics';
-import { chapters } from '../data/topics';
+import { algoChapters, pythonChapters, categoryMeta } from '../data/topics';
 import { withBase } from '../lib/url';
 
 interface Props {
@@ -10,6 +10,11 @@ interface Props {
   sections?: Section[];
 }
 const { chapterCn, chapterEn, currentSlug, sections = [] } = Astro.props;
+
+const groups = [
+  { key: 'algo' as const, list: algoChapters, hrefBase: 'topics' },
+  { key: 'python' as const, list: pythonChapters, hrefBase: 'python' },
+];
 ---
 <aside>
   <nav class="nav">
@@ -25,18 +30,20 @@ const { chapterCn, chapterEn, currentSlug, sections = [] } = Astro.props;
       ))}
     </div>
 
-    <div class="nav-group">
-      <span class="eyebrow">全部章节 / Chapters</span>
-      {chapters.map((c) => (
-        c.ready ? (
-          <a href={withBase(`/topics/${c.slug}`)} class={c.slug === currentSlug ? 'chapter-cur' : ''}>
-            <span class="idx">{c.num}</span>{c.cn}
-          </a>
-        ) : (
-          <a class="soon"><span class="idx">{c.num}</span>{c.cn}</a>
-        )
-      ))}
-    </div>
+    {groups.map((g) => (
+      <div class="nav-group">
+        <span class="eyebrow">{categoryMeta[g.key].cn} / {categoryMeta[g.key].en}</span>
+        {g.list.map((c) => (
+          c.ready ? (
+            <a href={withBase(`/${g.hrefBase}/${c.slug}`)} class={c.slug === currentSlug ? 'chapter-cur' : ''}>
+              <span class="idx">{c.num}</span>{c.cn}
+            </a>
+          ) : (
+            <a class="soon"><span class="idx">{c.num}</span>{c.cn}</a>
+          )
+        ))}
+      </div>
+    ))}
   </nav>
 </aside>
 

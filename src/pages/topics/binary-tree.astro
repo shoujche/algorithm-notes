@@ -22,12 +22,12 @@ import { ghBlob } from '../../lib/github';
 
 const chapter = chapters.find((c) => c.slug === 'binary-tree')!;
 ---
-<BaseLayout title="二叉树 Binary Tree · 算法手记">
+<BaseLayout title="二叉树 Binary Tree · 算法与 Python 面试手记" active="algo">
   <div class="layout">
     <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
     <main>
       <div class="hero">
-        <span class="eyebrow">算法手记 / 第 {chapter.num} 章 · 二叉树 Binary Tree</span>
+        <span class="eyebrow">算法与 Python 面试手记 / 第 {chapter.num} 章 · 二叉树 Binary Tree</span>
         <h2>二叉树：一切<em>递归</em>与<br />层序的起点</h2>
         <p>二叉树是递归思维最好的训练场。这一章从结构与四种遍历讲起，用分步动画拆解 BFS 层序遍历，再顺势拿下它的四个经典变体：锯齿形层序、右视图、最近公共祖先，以及完全性检验。每题都配可视化、思路与可运行代码。</p>
         <div class="meta">

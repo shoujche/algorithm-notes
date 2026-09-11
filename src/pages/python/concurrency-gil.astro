@@ -1,0 +1,172 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import Interview from '../../components/Interview.astro';
+import Complexity from '../../components/Complexity.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import { chapters } from '../../data/topics';
+import { cpuBound, ioBound, raceCondition, CODE_DIR } from '../../data/concurrency-gil-code';
+import { ghBlob } from '../../lib/github';
+
+const chapter = chapters.find((c) => c.slug === 'concurrency-gil')!;
+---
+<BaseLayout title="并发与 GIL · Python 面试 · 算法与 Python 面试手记" active="python">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Python & Agent / {chapter.num} · 并发与 GIL</span>
+        <h2>并发与 <em>GIL</em>：<br />为什么多线程跑不满多核</h2>
+        <p>GIL(全局解释器锁)是 CPython 面试的必考点。这一章讲清 GIL 到底锁了什么、如何调度，线程/进程/协程各自适用什么场景，以及「GIL 存在为何还要加锁」这个经典陷阱。</p>
+        <div class="meta">
+          <div><span class="n">6</span><span class="l">Topics</span></div>
+          <div><span class="n">GIL</span><span class="l">核心</span></div>
+          <div><span class="n">图解</span><span class="l">调度</span></div>
+          <div><span class="n">面试</span><span class="l">高频</span></div>
+        </div>
+      </div>
+
+      <!-- 01 GIL 是什么 -->
+      <section class="article" id="what-is-gil">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="基础 · Basics" /></div>
+        <h3>GIL 是什么</h3>
+        <p class="lead"><b>GIL(Global Interpreter Lock,全局解释器锁)</b>是 CPython 解释器的一把互斥锁:<b>任意时刻只允许一个线程执行 Python 字节码</b>。它是 CPython 实现的产物,不是 Python 语言规范的要求(Jython、PyPy-STM 就没有)。</p>
+        <Idea>
+          为什么会有 GIL?CPython 的内存管理靠<b>引用计数</b>,而 <kbd>ob_refcnt</kbd> 的增减不是线程安全的。给每个对象都加锁开销巨大且易死锁,于是 CPython 选择了一把「大锁」——用一把 GIL 保护整个解释器状态。
+          <ol class="steps">
+            <li><b>好处</b>:单线程程序无需加锁,C 扩展编写简单,引用计数天然安全。</li>
+            <li><b>代价</b>:多线程无法在多核上<b>并行执行 Python 字节码</b>,CPU 密集型任务多线程等于白搭。</li>
+          </ol>
+        </Idea>
+        <Interview q="GIL 锁的是进程还是线程?一个进程有几把 GIL?">
+          <p>GIL 是<b>解释器级别</b>的锁,每个 Python 进程有<b>一把</b>自己的 GIL。所以多进程能绕过 GIL——每个进程有独立的解释器和 GIL,可真正并行。这正是 <kbd>multiprocessing</kbd> 能吃满多核的原因。</p>
+        </Interview>
+      </section>
+
+      <!-- 02 GIL 如何调度 -->
+      <section class="article" id="scheduling">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="mid" text="原理 · Internals" /></div>
+        <h3>GIL 如何调度</h3>
+        <p class="lead">线程要执行字节码,必须先<b>持有 GIL</b>。持有者会在两种情况下释放锁:主动(遇到 I/O、sleep)或被动(达到切换阈值)。</p>
+        <div class="gil-diagram">
+          <div class="gil-track">
+            <span class="gil-label">线程 T1</span>
+            <div class="slot run">持锁运行</div>
+            <div class="slot wait">等待</div>
+            <div class="slot run">持锁运行</div>
+            <div class="slot wait">等待</div>
+          </div>
+          <div class="gil-track">
+            <span class="gil-label">线程 T2</span>
+            <div class="slot wait">等待</div>
+            <div class="slot run">持锁运行</div>
+            <div class="slot wait">等待</div>
+            <div class="slot run">持锁运行</div>
+          </div>
+          <div class="gil-axis">
+            <span>释放GIL</span><span>释放GIL</span><span>释放GIL</span><span>时间 →</span>
+          </div>
+        </div>
+        <Idea>
+          <b>切换时机(CPython 3.x)</b>:不再是「每 100 条字节码」的老机制,而是基于<b>时间片</b>——默认每 <kbd>5ms</kbd>(<kbd>sys.setswitchinterval()</kbd> 可调)会请求当前线程释放 GIL,让其他线程有机会抢锁。
+          <ol class="steps">
+            <li><b>主动释放</b>:线程遇到 I/O、<kbd>time.sleep</kbd>、等待锁时,会释放 GIL(所以 I/O 密集多线程有效)。</li>
+            <li><b>被动释放</b>:纯计算线程持锁超过切换间隔,解释器请求它交出 GIL。</li>
+          </ol>
+        </Idea>
+        <Interview q="为什么 CPU 密集型多线程反而可能比单线程更慢?">
+          <p>因为多了<b>GIL 争抢和线程上下文切换的开销</b>,却没换来任何并行收益(字节码仍串行执行)。线程越多,抢锁越激烈,额外开销越大,于是比单线程还慢。CPU 密集应改用<kbd>多进程</kbd>。</p>
+        </Interview>
+      </section>
+
+      <!-- 03 CPU vs IO -->
+      <section class="article" id="cpu-vs-io">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="mid" text="实战 · Benchmark" /></div>
+        <h3>CPU 密集 vs I/O 密集</h3>
+        <p class="lead">判断该用多线程还是多进程,关键看任务<b>卡在哪</b>:卡在计算(CPU)还是卡在等待(I/O)。</p>
+        <h4 class="sub">CPU 密集 · 多线程无效,多进程才行</h4>
+        <CodeBlock code={cpuBound} lang="python" file="cpu_bound.py" src={ghBlob(`${CODE_DIR}/cpu_bound.py`)} />
+        <h4 class="sub">I/O 密集 · 多线程有效(等待时释放 GIL)</h4>
+        <CodeBlock code={ioBound} lang="python" file="io_bound.py" src={ghBlob(`${CODE_DIR}/io_bound.py`)} />
+        <Complexity items={[
+          { l: 'CPU 密集', v: '多进程' },
+          { l: 'I/O 密集', v: '多线程 / 协程' },
+          { l: '判据', v: '卡在算还是等' },
+        ]} />
+      </section>
+
+      <!-- 04 race -->
+      <section class="article" id="race">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="hard" text="陷阱 · Gotcha" /></div>
+        <h3>有 GIL 为何还要加锁</h3>
+        <p class="lead">经典误区:「有 GIL 保证同一时刻只有一个线程,那还需要 <kbd>Lock</kbd> 吗?」——<b>需要</b>。GIL 保证的是<b>单条字节码</b>的原子性,而 <kbd>count += 1</kbd> 会编译成多条字节码。</p>
+        <Idea>
+          <kbd>count += 1</kbd> 实际是三步:<kbd>LOAD</kbd>(读)→ <kbd>ADD</kbd>(改)→ <kbd>STORE</kbd>(写)。线程可能在「读」之后、「写」之前被切走,导致两个线程读到同一个旧值,各自 +1 再写回,<b>丢失一次更新</b>。GIL 不保护复合操作,所以仍要 <kbd>Lock</kbd>。
+        </Idea>
+        <CodeBlock code={raceCondition} lang="python" file="race_condition.py" src={ghBlob(`${CODE_DIR}/race_condition.py`)} />
+        <Interview q="哪些操作是原子的、可以不用加锁?">
+          <p>单条字节码完成的操作通常原子,如 <kbd>list.append()</kbd>、<kbd>dict[k] = v</kbd> 的单次赋值。但「读-改-写」(<kbd>+=</kbd>)、「检查再操作」(<kbd>if k in d: d[k]+=1</kbd>)都是复合操作,<b>必须加锁</b>。规则:不确定就加锁,别赌字节码边界。</p>
+        </Interview>
+      </section>
+
+      <!-- 05 选型 -->
+      <section class="article" id="choose">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="mid" text="选型 · Decision" /></div>
+        <h3>线程 / 进程 / 协程选型</h3>
+        <p class="lead">三种并发模型,对应三类场景。面试常让你对比它们的开销、并行能力与适用场景。</p>
+        <div class="cx3">
+          <div class="cx3-col">
+            <h5>多线程 Thread</h5>
+            <ul>
+              <li>共享内存,切换开销中</li>
+              <li>受 GIL 限制,<b>不能并行算</b></li>
+              <li>✅ I/O 密集(爬虫、文件)</li>
+            </ul>
+          </div>
+          <div class="cx3-col">
+            <h5>多进程 Process</h5>
+            <ul>
+              <li>独立内存,开销大</li>
+              <li>各有 GIL,<b>真正并行</b></li>
+              <li>✅ CPU 密集(计算、图像)</li>
+            </ul>
+          </div>
+          <div class="cx3-col">
+            <h5>协程 Coroutine</h5>
+            <ul>
+              <li>单线程内切换,开销极小</li>
+              <li>协作式,<b>无 GIL 争抢</b></li>
+              <li>✅ 高并发 I/O(万级连接)</li>
+            </ul>
+          </div>
+        </div>
+        <Interview q="有了协程(asyncio),多线程还有存在意义吗?">
+          <p>有。协程要求全链路 <kbd>async</kbd>,遇到<b>不支持异步的阻塞库</b>(老的数据库驱动、CPU 小计算)就无能为力,此时用线程池(<kbd>run_in_executor</kbd>)兜底。实践中常<b>协程 + 线程池</b>配合:异步框架跑主流程,阻塞调用丢线程池。下一章 asyncio 细讲。</p>
+        </Interview>
+      </section>
+    </main>
+  </div>
+</BaseLayout>
+
+<style>
+  /* GIL 时间片调度图 */
+  .gil-diagram { border: 1px solid var(--line); border-radius: 14px; padding: 20px; margin: 16px 0; background: var(--surface); }
+  .gil-track { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+  .gil-label { flex: none; width: 64px; font-family: var(--font-mono); font-size: 12px; color: var(--graphite); font-weight: 600; }
+  .gil-track .slot { flex: 1; text-align: center; font-size: 12px; padding: 9px 4px; border-radius: 7px; font-family: var(--font-mono); }
+  .slot.run { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent-ink); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); font-weight: 600; }
+  .slot.wait { background: repeating-linear-gradient(45deg, transparent, transparent 5px, var(--line) 5px, var(--line) 6px); color: var(--muted); border: 1px dashed var(--line-strong); }
+  .gil-axis { display: flex; gap: 6px; padding-left: 70px; margin-top: 6px; }
+  .gil-axis span { flex: 1; text-align: center; font-size: 10px; color: var(--muted); font-family: var(--font-mono); }
+  .gil-axis span:last-child { text-align: right; }
+
+  /* 三栏对比 */
+  .cx3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 18px 0; }
+  .cx3-col { border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; background: var(--surface); }
+  .cx3-col h5 { margin: 0 0 10px; font-family: var(--font-display); font-size: 15px; color: var(--accent-ink); }
+  .cx3-col ul { margin: 0; padding-left: 18px; }
+  .cx3-col li { margin: 7px 0; font-size: 13.5px; color: var(--graphite); line-height: 1.5; }
+  @media (max-width: 860px) { .cx3 { grid-template-columns: 1fr; } }
+</style>

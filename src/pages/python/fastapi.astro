@@ -1,0 +1,165 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import Interview from '../../components/Interview.astro';
+import Complexity from '../../components/Complexity.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import { chapters } from '../../data/topics';
+import { concurrency, pydanticDemo, dependency, middleware, streaming, CODE_DIR } from '../../data/fastapi-code';
+import { ghBlob } from '../../lib/github';
+
+const chapter = chapters.find((c) => c.slug === 'fastapi')!;
+---
+<BaseLayout title="FastAPI 工程 · Python 面试 · 算法与 Python 面试手记" active="python">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Python & Agent / {chapter.num} · FastAPI 工程</span>
+        <h2><em>FastAPI</em>:异步框架<br />如何撑起 Agent 服务</h2>
+        <p>FastAPI 是 Agent / LLM 服务最主流的 Web 框架。这一章讲清它的并发模型(async vs sync 路由怎么分流)、Pydantic 自动校验、依赖注入、中间件与生命周期,以及呼应 LLM 的流式响应。</p>
+        <div class="meta">
+          <div><span class="n">5</span><span class="l">Topics</span></div>
+          <div><span class="n">并发</span><span class="l">核心</span></div>
+          <div><span class="n">架构图</span><span class="l">分流</span></div>
+          <div><span class="n">面试</span><span class="l">高频</span></div>
+        </div>
+      </div>
+
+      <!-- 01 并发模型 -->
+      <section class="article" id="concurrency-model">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="hard" text="核心 · Concurrency" /></div>
+        <h3>并发模型:async vs sync 路由</h3>
+        <p class="lead">这是 FastAPI 最重要、也最容易答错的面试点。一个请求进来,FastAPI 会看你的路由是 <kbd>async def</kbd> 还是普通 <kbd>def</kbd>,据此<b>分流</b>:async 路由跑在事件循环上,普通 def 路由被丢到线程池执行。</p>
+        <div class="fa-diagram">
+          <div class="fa-entry">HTTP 请求进入</div>
+          <div class="fa-split">FastAPI 看路由类型 · 分流</div>
+          <div class="fa-branches">
+            <div class="fa-branch async">
+              <div class="fa-branch-head">路由是 <b>async def</b></div>
+              <div class="fa-node accent">事件循环 Event Loop<br /><span>主线程 · 单线程</span></div>
+              <p class="fa-note">全程 await 非阻塞,单线程扛万级并发。<b>阻塞调用会卡死所有请求。</b></p>
+            </div>
+            <div class="fa-branch sync">
+              <div class="fa-branch-head">路由是普通 <b>def</b></div>
+              <div class="fa-node">线程池 ThreadPool<br /><span>独立工作线程</span></div>
+              <p class="fa-note">同步阻塞代码在此安全运行,不占用事件循环,但线程数有上限。</p>
+            </div>
+          </div>
+        </div>
+        <Idea>
+          FastAPI 的分流规则很朴素:<b>它假设你写对了</b>。声明 <kbd>async def</kbd> 就当你全程非阻塞,直接放事件循环;声明普通 <kbd>def</kbd> 就当你可能有阻塞,保险起见丢线程池。
+          <ol class="steps">
+            <li><b>async 路由</b>:跑在事件循环主线程,并发能力最强,但里面写同步阻塞会拖垮全局。</li>
+            <li><b>def 路由</b>:自动进线程池,同步阻塞安全,但受线程池大小限制(默认约 40)。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={concurrency} lang="python" file="concurrency.py" src={ghBlob(`${CODE_DIR}/concurrency.py`)} />
+        <Complexity items={[
+          { l: 'async def', v: '事件循环' },
+          { l: '普通 def', v: '线程池' },
+          { l: '判据', v: '内部是否异步非阻塞' },
+        ]} />
+        <Interview q="什么时候用 def、什么时候用 async def 路由?">
+          <p>看函数内部的调用:全程是<b>异步非阻塞</b>库(<kbd>await httpx</kbd>、异步 ORM)→ 用 <kbd>async def</kbd>,并发最强;内部是<b>同步阻塞</b>调用(老数据库驱动、<kbd>requests</kbd>、CPU 小计算)且没有异步版本 → 用普通 <kbd>def</kbd>,让 FastAPI 丢线程池兜底。<b>最忌讳</b>在 <kbd>async def</kbd> 里写同步阻塞代码——单个慢请求会冻结整个事件循环、拖垮所有并发。</p>
+        </Interview>
+      </section>
+
+      <!-- 02 Pydantic -->
+      <section class="article" id="pydantic">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="base" text="基础 · Validation" /></div>
+        <h3>Pydantic 数据校验</h3>
+        <p class="lead">Pydantic 是 FastAPI 的数据层核心:你用 <kbd>BaseModel</kbd> 声明「数据长什么样」,请求进来时 FastAPI 自动解析、校验、类型转换,不合法直接返回 <kbd>422</kbd>,轮不到你的业务代码。</p>
+        <Idea>
+          这是「<b>解析而非校验(parse, don't validate)</b>」思想的工程落地:把非法数据挡在系统边界之外。进入路由函数的 <kbd>user</kbd> 已是通过全部约束的强类型对象,业务代码<b>无需再写一行校验</b>。
+          <ol class="steps">
+            <li><kbd>Field(...)</kbd> 的 <kbd>...</kbd> 表示必填;给默认值即可选。</li>
+            <li>约束(<kbd>min_length</kbd>、<kbd>gt</kbd>、<kbd>le</kbd>)不过自动 422,错误信息精确到字段。</li>
+            <li>类型转换:传 <kbd>"18"</kbd> 自动转 <kbd>int 18</kbd>,传 <kbd>"abc"</kbd> 则 422。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={pydanticDemo} lang="python" file="pydantic_demo.py" src={ghBlob(`${CODE_DIR}/pydantic_demo.py`)} />
+        <Interview q="response_model 有什么用?为什么要单独定义响应模型?">
+          <p><kbd>response_model</kbd> 声明返回的数据结构,FastAPI 会据此<b>过滤字段</b>——只保留模型里声明的字段,自动剔除敏感数据(如密码、内部字段)。同时它还负责返回值的序列化与文档生成。用独立的 <kbd>UserOut</kbd> 而非直接返回数据库对象,是防止字段泄露的工程惯例。</p>
+        </Interview>
+      </section>
+
+      <!-- 03 依赖注入 -->
+      <section class="article" id="di">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="mid" text="机制 · DI" /></div>
+        <h3>依赖注入</h3>
+        <p class="lead">依赖注入让你把「获取资源 / 校验权限 / 解析公共参数」抽成可复用函数,路由只需用 <kbd>Depends()</kbd> 声明「我需要什么」,FastAPI 在调用前把它准备好并注入进来。</p>
+        <Idea>
+          依赖可以<b>嵌套</b>:<kbd>get_current_user</kbd> 依赖 <kbd>get_db</kbd> 和请求头 token,<kbd>require_admin</kbd> 又依赖 <kbd>get_current_user</kbd>。FastAPI 会自动求解整棵依赖树,按顺序解出每个节点再注入。
+          <ol class="steps">
+            <li><b>复用</b>:<kbd>get_db</kbd>、<kbd>get_current_user</kbd> 一次定义,处处使用。</li>
+            <li><b>yield 型依赖</b>:yield 前是准备,yield 后是清理,自带 try/finally 管理资源。</li>
+            <li><b>可测试</b>:测试用 <kbd>dependency_overrides</kbd> 替换依赖即可 mock。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={dependency} lang="python" file="dependency.py" src={ghBlob(`${CODE_DIR}/dependency.py`)} />
+        <Interview q="Depends 的依赖会缓存吗?">
+          <p>会,但只在<b>同一次请求内</b>。如果多个依赖都依赖 <kbd>get_db</kbd>,FastAPI 默认(<kbd>use_cache=True</kbd>)只调用 <kbd>get_db</kbd> 一次,结果在这次请求里被复用,避免重复建连接。<b>跨请求不共享、不缓存</b>——每个新请求都会重新求值。若确实想在同一请求里每次都重新执行,用 <kbd>Depends(get_db, use_cache=False)</kbd>。</p>
+        </Interview>
+      </section>
+
+      <!-- 04 中间件与生命周期 -->
+      <section class="article" id="middleware">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="工程 · Lifecycle" /></div>
+        <h3>中间件与生命周期</h3>
+        <p class="lead"><b>中间件</b>是包在每个请求外面的「洋葱皮」,请求进来先经过它、响应出去再经过它,适合记录耗时、统一日志、限流。<b>lifespan</b> 则管理应用启动 / 关闭时的资源(连接池、模型加载)。</p>
+        <Idea>
+          中间件是<b>洋葱模型</b>:<kbd>call_next</kbd> 之前是「请求前」,之后是「响应后」;多个中间件按注册相反顺序层层包裹,进去再出来。lifespan 用 <kbd>yield</kbd> 分隔:yield 前在启动时跑一次,yield 后在关闭时跑一次。
+          <ol class="steps">
+            <li><b>中间件</b>:<kbd>@app.middleware("http")</kbd> 记录每个请求耗时,塞进响应头。</li>
+            <li><b>lifespan</b>:启动时建连接池、加载模型挂到 <kbd>app.state</kbd>,关闭时统一释放。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={middleware} lang="python" file="middleware.py" src={ghBlob(`${CODE_DIR}/middleware.py`)} />
+        <Interview q="为什么用 lifespan 而不是每次请求都建连接?">
+          <p>连接池、模型加载这类资源<b>初始化昂贵</b>,应在应用启动时建<b>一次</b>、全程复用,关闭时统一释放。若每个请求都建连接,不仅有巨大的重复开销,还容易资源泄漏、耗尽连接数。lifespan 取代了旧的 <kbd>@app.on_event("startup"/"shutdown")</kbd>,用 <kbd>asynccontextmanager</kbd> 把启动与关闭逻辑写在一起,更清晰、更不易漏掉清理。</p>
+        </Interview>
+      </section>
+
+      <!-- 05 流式响应 -->
+      <section class="article" id="streaming">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="hard" text="实战 · Streaming" /></div>
+        <h3>流式响应</h3>
+        <p class="lead">普通 Response 把结果算完一次性发送;<kbd>StreamingResponse</kbd> 配合 async generator「产出一块、发一块」,客户端边收边显示——这正是 ChatGPT「逐字蹦出来」的底层机制,呼应 LLM 的流式输出。</p>
+        <Idea>
+          流式的价值:<b>首字节延迟低</b>(第一块就发)、<b>内存占用小</b>(只需容纳当前块)、体验好。SSE(Server-Sent Events)格式每条消息形如 <kbd>data: 内容\n\n</kbd>,前端用 <kbd>EventSource</kbd> 天然支持。
+          <ol class="steps">
+            <li>用 <kbd>async generator</kbd> 逐块 <kbd>yield</kbd>,<kbd>await</kbd> 期间不阻塞其他请求。</li>
+            <li>SSE 用 <kbd>media_type="text/event-stream"</kbd>,自定义 <kbd>[DONE]</kbd> 作结束信号。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={streaming} lang="python" file="streaming.py" src={ghBlob(`${CODE_DIR}/streaming.py`)} />
+        <Interview q="StreamingResponse 和普通 Response 有什么区别?">
+          <p>普通 Response <b>算完一次性发</b>,客户端要等全部就绪,首字节延迟高,且服务端要把整个 body 堆在内存里。<kbd>StreamingResponse</kbd> <b>边算边发、逐块推送</b>,首字节延迟低、内存只需容纳当前块,适合 LLM 输出、大文件下载、实时日志。代价是无法预知 <kbd>Content-Length</kbd>,用分块传输(chunked)。LLM 场景常用 SSE 而非 WebSocket——因为是服务端<b>单向</b>持续推 token,SSE 基于 HTTP、自动重连、实现简单,正好够用。</p>
+        </Interview>
+      </section>
+    </main>
+  </div>
+</BaseLayout>
+
+<style>
+  /* FastAPI 请求分流架构图 */
+  .fa-diagram { border: 1px solid var(--line); border-radius: 14px; padding: 22px; margin: 16px 0; background: var(--surface); }
+  .fa-entry, .fa-split { text-align: center; font-family: var(--font-mono); font-size: 13px; border-radius: 9px; padding: 11px 14px; margin: 0 auto; max-width: 320px; }
+  .fa-entry { background: #fff; border: 1px solid var(--line-strong); color: var(--graphite); font-weight: 600; }
+  .fa-split { margin-top: 10px; background: color-mix(in srgb, var(--accent) 10%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent); color: var(--accent-ink); font-weight: 600; position: relative; }
+  .fa-split::after { content: ''; display: block; width: 1px; height: 14px; background: var(--line-strong); margin: 0 auto; position: absolute; left: 50%; bottom: -14px; }
+  .fa-branches { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 24px; }
+  .fa-branch { border: 1px solid var(--line); border-radius: 12px; padding: 16px; background: #fff; }
+  .fa-branch.async { border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .fa-branch-head { text-align: center; font-size: 13px; color: var(--graphite); margin-bottom: 12px; }
+  .fa-branch-head b { font-family: var(--font-mono); color: var(--accent-ink); }
+  .fa-node { text-align: center; font-family: var(--font-mono); font-size: 13px; font-weight: 600; border-radius: 9px; padding: 14px 10px; line-height: 1.5; border: 1px solid var(--line-strong); background: var(--surface); color: var(--graphite); }
+  .fa-node span { display: block; font-size: 11px; font-weight: 400; color: var(--muted); margin-top: 3px; }
+  .fa-node.accent { color: #fff; border: none; background: linear-gradient(135deg, var(--accent), var(--accent-ink)); box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 32%, transparent); }
+  .fa-node.accent span { color: rgba(255,255,255,.82); }
+  .fa-note { font-size: 12.5px; color: var(--muted); line-height: 1.5; margin: 10px 2px 0; }
+  @media (max-width: 640px) { .fa-branches { grid-template-columns: 1fr; } }
+</style>
