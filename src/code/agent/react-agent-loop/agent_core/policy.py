@@ -4,7 +4,7 @@ import hashlib
 import json
 from typing import Any
 
-from .contracts import ApprovalRequest, Risk, ToolProposal
+from .contracts import ApprovalRequest, Risk, ToolProposal, to_json_value
 
 _READ_ONLY_TOOLS = frozenset({"list_files", "read_file", "list_skills", "read_skill"})
 _APPROVABLE_TOOLS = frozenset({"write_file", "run_command"})
@@ -12,10 +12,11 @@ _APPROVABLE_TOOLS = frozenset({"write_file", "run_command"})
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(
-        value,
+        to_json_value(value),
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
+        allow_nan=False,
     )
 
 
@@ -44,7 +45,11 @@ class ToolPolicy:
             preview: str | list[str] = str(proposal.arguments.get("content", ""))
         else:
             argv = proposal.arguments.get("argv", [])
-            preview = [str(argument) for argument in argv] if isinstance(argv, list) else []
+            preview = (
+                [str(argument) for argument in argv]
+                if isinstance(argv, (list, tuple))
+                else []
+            )
 
         return ApprovalRequest(
             proposal=proposal,

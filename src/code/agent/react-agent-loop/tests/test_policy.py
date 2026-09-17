@@ -76,3 +76,37 @@ def test_tool_proposal_is_immutable() -> None:
 
     with pytest.raises(FrozenInstanceError):
         proposal.tool_name = "write_file"  # type: ignore[misc]
+
+
+def test_tool_proposal_arguments_reject_top_level_mutation() -> None:
+    proposal = ToolProposal("c9", "read_file", {"path": "a.py"})
+
+    with pytest.raises(TypeError):
+        proposal.arguments["path"] = "changed.py"  # type: ignore[index]
+
+
+def test_tool_proposal_arguments_reject_nested_mutation() -> None:
+    proposal = ToolProposal(
+        "c10",
+        "run_command",
+        {"options": {"environment": {"MODE": "safe"}}},
+    )
+
+    with pytest.raises(TypeError):
+        proposal.arguments["options"]["environment"]["MODE"] = "changed"  # type: ignore[index]
+
+
+def test_tool_proposal_deep_copies_source_arguments() -> None:
+    source = {
+        "path": "a.py",
+        "metadata": {"labels": ["reviewed"]},
+    }
+    proposal = ToolProposal("c11", "write_file", source)
+    original_digest = approval_digest(proposal)
+
+    source["path"] = "changed.py"
+    source["metadata"]["labels"].append("mutated")  # type: ignore[union-attr]
+
+    assert proposal.arguments["path"] == "a.py"
+    assert proposal.arguments["metadata"]["labels"] == ("reviewed",)
+    assert approval_digest(proposal) == original_digest

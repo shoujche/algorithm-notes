@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import stat
+from dataclasses import replace
 
 import pytest
 
@@ -100,3 +102,86 @@ def test_checkpoint_rejects_secret_bearing_state(tmp_path) -> None:
         store.save(state)
 
     assert store.load(state.run_id) is None
+
+
+@pytest.mark.parametrize(
+    "secret_key",
+    ["openai_api_key", "client_secret", "service-password", "refreshToken", "token"],
+)
+def test_checkpoint_rejects_nested_secret_key_variants(
+    tmp_path,
+    secret_key: str,
+) -> None:
+    store = JsonCheckpointStore(tmp_path / ".runs")
+    state = RunState(
+        run_id="run-secret-key",
+        response_state={"provider": {"configuration": {secret_key: "sensitive"}}},
+    )
+
+    with pytest.raises(ValueError, match="secret"):
+        store.save(state)
+
+    assert store.load(state.run_id) is None
+
+
+def test_checkpoint_rejects_credentials_inside_pending_write_content(tmp_path) -> None:
+    store = JsonCheckpointStore(tmp_path / ".runs")
+    synthetic_token = "sk-" + "proj-" + ("A" * 48)
+    proposal = ToolProposal(
+        "call-secret",
+        "write_file",
+        {
+            "path": ".env",
+            "content": f"OPENAI_API_KEY={synthetic_token}",
+        },
+    )
+    request = ApprovalRequest(
+        proposal=proposal,
+        risk=Risk.APPROVAL,
+        normalized_arguments="not-persistable",
+        preview="not-persistable",
+        digest="digest",
+    )
+    state = replace(sample_state("run-write-secret"), pending_approval=request)
+
+    with pytest.raises(ValueError, match="secret"):
+        store.save(state)
+
+    assert store.load(state.run_id) is None
+
+
+@pytest.mark.parametrize(
+    "synthetic_token",
+    [
+        "sk-" + "proj-" + ("B" * 48),
+        "gh" + "p_" + ("C" * 36),
+        "eyJ" + ("D" * 20) + "." + ("E" * 24) + "." + ("F" * 24),
+    ],
+)
+def test_checkpoint_rejects_common_token_shapes(
+    tmp_path,
+    synthetic_token: str,
+) -> None:
+    store = JsonCheckpointStore(tmp_path / ".runs")
+    state = RunState(
+        run_id="run-token-shape",
+        response_state={"messages": [{"role": "tool", "content": synthetic_token}]},
+    )
+
+    with pytest.raises(ValueError, match="secret"):
+        store.save(state)
+
+    assert store.load(state.run_id) is None
+
+
+def test_checkpoint_rejects_non_whitelisted_persisted_fields(tmp_path) -> None:
+    store = JsonCheckpointStore(tmp_path / ".runs")
+    state = sample_state()
+    store.save(state)
+    checkpoint_path = tmp_path / ".runs" / "run-1.json"
+    payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    payload["unexpected"] = "not part of RunState"
+    checkpoint_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="field"):
+        store.load(state.run_id)

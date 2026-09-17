@@ -4,36 +4,80 @@ import json
 import os
 import re
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from .contracts import ApprovalRequest, Risk, RunState, ToolProposal
+from .contracts import ApprovalRequest, Risk, RunState, ToolProposal, to_json_value
 
 _RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
-_SECRET_KEYS = frozenset(
+_STATE_FIELDS = frozenset(
     {
-        "api_key",
-        "apikey",
-        "access_token",
-        "auth_token",
-        "authorization",
-        "credentials",
-        "password",
-        "private_key",
-        "refresh_token",
-        "secret",
+        "run_id",
+        "response_state",
+        "turn",
+        "max_turns",
+        "tool_calls",
+        "max_tool_calls",
+        "pending_approval",
+        "executed_call_ids",
     }
+)
+_APPROVAL_FIELDS = frozenset(
+    {"proposal", "risk", "normalized_arguments", "preview", "digest"}
+)
+_PROPOSAL_FIELDS = frozenset({"call_id", "tool_name", "arguments"})
+_SECRET_VALUE_PATTERNS = (
+    re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bAIza[A-Za-z0-9_-]{35}\b"),
+    re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
+    re.compile(r"\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b"),
+    re.compile(
+        r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"
+    ),
+    re.compile(r"-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----"),
+    re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}"),
+    re.compile(
+        r"""(?ix)
+        \b(?:[a-z0-9]+[_-])*
+        (?:api[_-]?key|client[_-]?secret|password|
+           access[_-]?token|refresh[_-]?token|private[_-]?key)
+        \b\s*[:=]\s*["']?[^\s"']{4,}
+        """
+    ),
 )
 
 
+def _key_may_hold_secret(key: str) -> bool:
+    snake_case = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key)
+    normalized = re.sub(r"[^a-z0-9]+", "_", snake_case.lower()).strip("_")
+    parts = set(normalized.split("_"))
+    if parts & {"secret", "password", "passwd", "credential", "credentials"}:
+        return True
+    if normalized in {"authorization", "privatekey", "apikey", "token"}:
+        return True
+    if {"api", "key"} <= parts or {"private", "key"} <= parts:
+        return True
+    return "token" in parts and bool(
+        parts & {"access", "auth", "bearer", "id", "refresh"}
+    )
+
+
+def _value_looks_like_secret(value: str) -> bool:
+    return any(pattern.search(value) for pattern in _SECRET_VALUE_PATTERNS)
+
+
 def _contains_secret(value: Any) -> bool:
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         for key, child in value.items():
-            normalized_key = str(key).lower().replace("-", "_")
-            if normalized_key in _SECRET_KEYS or _contains_secret(child):
+            if _key_may_hold_secret(str(key)) or _contains_secret(child):
                 return True
     elif isinstance(value, (list, tuple)):
         return any(_contains_secret(child) for child in value)
+    elif isinstance(value, str):
+        return _value_looks_like_secret(value)
     return False
 
 
@@ -41,7 +85,7 @@ def _proposal_to_dict(proposal: ToolProposal) -> dict[str, Any]:
     return {
         "call_id": proposal.call_id,
         "tool_name": proposal.tool_name,
-        "arguments": proposal.arguments,
+        "arguments": to_json_value(proposal.arguments),
     }
 
 
@@ -50,7 +94,7 @@ def _approval_to_dict(request: ApprovalRequest) -> dict[str, Any]:
         "proposal": _proposal_to_dict(request.proposal),
         "risk": request.risk.value,
         "normalized_arguments": request.normalized_arguments,
-        "preview": request.preview,
+        "preview": to_json_value(request.preview),
         "digest": request.digest,
     }
 
@@ -58,7 +102,7 @@ def _approval_to_dict(request: ApprovalRequest) -> dict[str, Any]:
 def _state_to_dict(state: RunState) -> dict[str, Any]:
     return {
         "run_id": state.run_id,
-        "response_state": state.response_state,
+        "response_state": to_json_value(state.response_state),
         "turn": state.turn,
         "max_turns": state.max_turns,
         "tool_calls": state.tool_calls,
@@ -72,7 +116,49 @@ def _state_to_dict(state: RunState) -> dict[str, Any]:
     }
 
 
+def _require_exact_fields(
+    data: Any,
+    expected: frozenset[str],
+    context: str,
+) -> Mapping[str, Any]:
+    if not isinstance(data, Mapping):
+        raise ValueError(f"{context} must be a JSON object")
+    actual = set(data)
+    if actual != expected:
+        unknown = sorted(actual - expected)
+        missing = sorted(expected - actual)
+        raise ValueError(
+            f"{context} field whitelist mismatch; unknown={unknown}, missing={missing}"
+        )
+    return data
+
+
+def _validate_checkpoint_schema(data: Any) -> Mapping[str, Any]:
+    state_data = _require_exact_fields(data, _STATE_FIELDS, "checkpoint")
+    if not isinstance(state_data["response_state"], Mapping):
+        raise ValueError("response_state must be a JSON object")
+    if not isinstance(state_data["executed_call_ids"], list):
+        raise ValueError("executed_call_ids must be a JSON array")
+
+    approval_data = state_data["pending_approval"]
+    if approval_data is not None:
+        approval = _require_exact_fields(
+            approval_data,
+            _APPROVAL_FIELDS,
+            "approval",
+        )
+        proposal = _require_exact_fields(
+            approval["proposal"],
+            _PROPOSAL_FIELDS,
+            "proposal",
+        )
+        if not isinstance(proposal["arguments"], Mapping):
+            raise ValueError("proposal arguments must be a JSON object")
+    return state_data
+
+
 def _state_from_dict(data: dict[str, Any]) -> RunState:
+    data = dict(_validate_checkpoint_schema(data))
     approval_data = data.get("pending_approval")
     approval = None
     if approval_data is not None:
@@ -154,6 +240,9 @@ class JsonCheckpointStore:
                 data = json.load(checkpoint)
         except FileNotFoundError:
             return None
+        _validate_checkpoint_schema(data)
+        if _contains_secret(data):
+            raise ValueError("checkpoint state contains a secret-bearing field")
         state = _state_from_dict(data)
         if state.run_id != run_id:
             raise ValueError("checkpoint run_id does not match its filename")
