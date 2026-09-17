@@ -61,6 +61,24 @@ def test_read_skill_returns_the_complete_utf8_document(tmp_path: Path) -> None:
     )
 
 
+def test_every_discovered_name_can_be_read_when_directory_name_differs(
+    tmp_path: Path,
+) -> None:
+    skill_file = write_skill(
+        tmp_path,
+        "implementation-directory",
+        name="declared-name",
+        body="Load me by my declared name.",
+    )
+
+    summaries = list_skills(tmp_path)
+
+    assert [summary.name for summary in summaries] == ["declared-name"]
+    assert read_skill(tmp_path, summaries[0].name) == skill_file.read_text(
+        encoding="utf-8"
+    )
+
+
 def test_list_skills_rejects_missing_description(tmp_path: Path) -> None:
     write_skill(tmp_path, "missing-description", description=None)
 
@@ -155,3 +173,52 @@ def test_list_skills_rejects_symlink_escape(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="outside"):
         list_skills(root)
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "symlink"),
+    reason="symbolic links are unavailable",
+)
+@pytest.mark.parametrize("operation", ["list", "read"])
+def test_skill_directory_symlink_is_rejected_even_within_root(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    write_skill(tmp_path, "real-directory", name="linked-directory")
+    (tmp_path / "linked-directory").symlink_to(
+        tmp_path / "real-directory",
+        target_is_directory=True,
+    )
+
+    with pytest.raises(ValueError, match="symlink"):
+        if operation == "list":
+            list_skills(tmp_path)
+        else:
+            read_skill(tmp_path, "linked-directory")
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "symlink"),
+    reason="symbolic links are unavailable",
+)
+@pytest.mark.parametrize("operation", ["list", "read"])
+def test_skill_file_symlink_is_rejected_even_within_root(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    target_dir = tmp_path / "target"
+    target_dir.mkdir()
+    target_file = target_dir / "metadata.md"
+    target_file.write_text(
+        "---\nname: linked-file\ndescription: Linked file.\n---\n",
+        encoding="utf-8",
+    )
+    linked_dir = tmp_path / "linked-file"
+    linked_dir.mkdir()
+    (linked_dir / "SKILL.md").symlink_to(target_file)
+
+    with pytest.raises(ValueError, match="symlink"):
+        if operation == "list":
+            list_skills(tmp_path)
+        else:
+            read_skill(tmp_path, "linked-file")

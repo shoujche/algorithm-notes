@@ -18,26 +18,11 @@ class SkillSummary:
 
 
 def list_skills(root: Path) -> list[SkillSummary]:
-    trusted_root = root.resolve()
-    if not trusted_root.is_dir():
-        raise ValueError("Skill root must be a directory")
-
-    summaries: list[SkillSummary] = []
-    names: set[str] = set()
-    for entry in root.iterdir():
-        skill_file = entry / "SKILL.md"
-        if not skill_file.exists():
-            continue
-
-        safe_file = _resolve_beneath(trusted_root, skill_file)
-        content = _read_utf8(safe_file, _DEFAULT_MAX_BYTES)
-        summary = _parse_summary(content, safe_file)
-        if summary.name in names:
-            raise ValueError(f"duplicate Skill name: {summary.name}")
-        names.add(summary.name)
-        summaries.append(summary)
-
-    return sorted(summaries, key=lambda summary: summary.name)
+    skills = _discover_skills(root)
+    return sorted(
+        (summary for summary, _ in skills.values()),
+        key=lambda summary: summary.name,
+    )
 
 
 def read_skill(root: Path, name: str, max_bytes: int = _DEFAULT_MAX_BYTES) -> str:
@@ -45,11 +30,42 @@ def read_skill(root: Path, name: str, max_bytes: int = _DEFAULT_MAX_BYTES) -> st
     if max_bytes < 0:
         raise ValueError("max_bytes must be non-negative")
 
+    skills = _discover_skills(root)
+    try:
+        _, skill_file = skills[name]
+    except KeyError as error:
+        raise ValueError(f"unknown Skill name: {name}") from error
+    return _read_utf8(skill_file, max_bytes)
+
+
+def _discover_skills(root: Path) -> dict[str, tuple[SkillSummary, Path]]:
+    if root.is_symlink():
+        raise ValueError("Skill symlink path is forbidden")
     trusted_root = root.resolve()
     if not trusted_root.is_dir():
         raise ValueError("Skill root must be a directory")
-    skill_file = _resolve_beneath(trusted_root, root / name / "SKILL.md")
-    return _read_utf8(skill_file, max_bytes)
+
+    skills: dict[str, tuple[SkillSummary, Path]] = {}
+    for entry in root.iterdir():
+        if entry.is_symlink():
+            raise ValueError(
+                "Skill symlink path is forbidden and may resolve outside trusted root"
+            )
+        skill_file = entry / "SKILL.md"
+        if not skill_file.exists():
+            continue
+        if skill_file.is_symlink():
+            raise ValueError(
+                "Skill symlink path is forbidden and may resolve outside trusted root"
+            )
+
+        safe_file = _resolve_beneath(trusted_root, skill_file)
+        content = _read_utf8(safe_file, _DEFAULT_MAX_BYTES)
+        summary = _parse_summary(content, safe_file)
+        if summary.name in skills:
+            raise ValueError(f"duplicate Skill name: {summary.name}")
+        skills[summary.name] = (summary, safe_file)
+    return skills
 
 
 def _parse_summary(content: str, source: Path) -> SkillSummary:
