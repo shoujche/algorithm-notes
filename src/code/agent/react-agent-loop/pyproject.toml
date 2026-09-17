@@ -27,3 +27,6 @@ packages = ["agent_core"]
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]
+markers = [
+    "docker: tests requiring the explicitly built Docker sandbox image",
+]
