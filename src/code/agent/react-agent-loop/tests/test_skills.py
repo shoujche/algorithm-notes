@@ -129,6 +129,34 @@ def test_list_skills_uses_safe_yaml_parsing(tmp_path: Path) -> None:
         list_skills(tmp_path)
 
 
+def test_list_skills_rejects_missing_frontmatter_delimiter(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "unterminated"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: unterminated\ndescription: Missing closing delimiter.\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unterminated"):
+        list_skills(tmp_path)
+
+
+def test_list_skills_rejects_oversized_frontmatter(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "oversized-frontmatter"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: oversized-frontmatter\n"
+        f"description: {'x' * 9_000}\n"
+        "---\n"
+        "Small body.\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="frontmatter.*8192-byte limit"):
+        list_skills(tmp_path)
+
+
 def test_read_skill_rejects_files_over_the_byte_limit(tmp_path: Path) -> None:
     write_skill(tmp_path, "large", body="é" * 100)
 
@@ -148,6 +176,17 @@ def test_read_skill_honors_custom_limit_above_default(tmp_path: Path) -> None:
 
     assert read_skill(tmp_path, "custom-limit", max_bytes=40_000) == (
         skill_file.read_text(encoding="utf-8")
+    )
+
+
+def test_unrelated_large_skill_does_not_block_small_target_read(
+    tmp_path: Path,
+) -> None:
+    target_file = write_skill(tmp_path, "target", body="Small target.")
+    write_skill(tmp_path, "unrelated-large", body="x" * 33_000)
+
+    assert read_skill(tmp_path, "target", max_bytes=256) == target_file.read_text(
+        encoding="utf-8"
     )
 
 

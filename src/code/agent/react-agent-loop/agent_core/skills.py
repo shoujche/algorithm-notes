@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 
 _DEFAULT_MAX_BYTES = 32_768
+_MAX_FRONTMATTER_BYTES = 8_192
 _NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
 
@@ -30,7 +31,7 @@ def read_skill(root: Path, name: str, max_bytes: int = _DEFAULT_MAX_BYTES) -> st
     if max_bytes < 0:
         raise ValueError("max_bytes must be non-negative")
 
-    skills = _discover_skills(root, max_bytes=max_bytes)
+    skills = _discover_skills(root)
     try:
         _, skill_file = skills[name]
     except KeyError as error:
@@ -38,10 +39,7 @@ def read_skill(root: Path, name: str, max_bytes: int = _DEFAULT_MAX_BYTES) -> st
     return _read_utf8(skill_file, max_bytes)
 
 
-def _discover_skills(
-    root: Path,
-    max_bytes: int = _DEFAULT_MAX_BYTES,
-) -> dict[str, tuple[SkillSummary, Path]]:
+def _discover_skills(root: Path) -> dict[str, tuple[SkillSummary, Path]]:
     if root.is_symlink():
         raise ValueError("Skill symlink path is forbidden")
     trusted_root = root.resolve()
@@ -63,12 +61,43 @@ def _discover_skills(
             )
 
         safe_file = _resolve_beneath(trusted_root, skill_file)
-        content = _read_utf8(safe_file, max_bytes)
-        summary = _parse_summary(content, safe_file)
+        frontmatter = _read_frontmatter(safe_file)
+        summary = _parse_summary(frontmatter, safe_file)
         if summary.name in skills:
             raise ValueError(f"duplicate Skill name: {summary.name}")
         skills[summary.name] = (summary, safe_file)
     return skills
+
+
+def _read_frontmatter(path: Path) -> str:
+    payload = bytearray()
+    with path.open("rb") as stream:
+        for line_number in range(1, _MAX_FRONTMATTER_BYTES + 1):
+            remaining = _MAX_FRONTMATTER_BYTES - len(payload)
+            line = stream.readline(remaining + 1)
+            if len(line) > remaining:
+                raise ValueError(
+                    "Skill frontmatter exceeds 8192-byte limit"
+                )
+            if not line:
+                if line_number == 1:
+                    raise ValueError(f"{path} has no YAML frontmatter")
+                raise ValueError(f"{path} has unterminated YAML frontmatter")
+            payload.extend(line)
+
+            delimiter = line.rstrip(b"\r\n")
+            if line_number == 1:
+                if delimiter != b"---":
+                    raise ValueError(f"{path} has no YAML frontmatter")
+            elif delimiter == b"---":
+                break
+        else:
+            raise ValueError("Skill frontmatter exceeds 8192-byte limit")
+
+    try:
+        return payload.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError(f"Skill frontmatter is not valid UTF-8: {path}") from error
 
 
 def _parse_summary(content: str, source: Path) -> SkillSummary:
