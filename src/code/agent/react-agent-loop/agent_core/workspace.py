@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
+import selectors
+import secrets
+import signal
+import stat
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -12,6 +18,7 @@ _VIRTUAL_ROOT = Path("/workspace")
 _MAX_PATH_BYTES = 4_096
 _MAX_ARGUMENT_BYTES = 4_096
 _MAX_COMMAND_INPUT_BYTES = 16_384
+_MAX_LIST_ENTRIES = 1_000
 _MINIMAL_ENV = {
     "LANG": "C.UTF-8",
     "LC_ALL": "C.UTF-8",
@@ -48,35 +55,61 @@ class WorkspaceTools:
         return self._max_output_bytes
 
     async def list_files(self, path: str = ".") -> dict[str, Any]:
-        target = self._resolve_workspace_path(path, must_exist=True)
-        if not target.is_dir():
-            raise ValueError("workspace path must be a directory")
-
-        entries: list[dict[str, str]] = []
-        for entry in sorted(target.iterdir(), key=lambda item: item.name):
-            if entry.is_symlink():
-                raise ValueError(f"workspace symlink path is forbidden: {entry.name}")
-            kind = "directory" if entry.is_dir() else "file"
-            entries.append(
-                {
-                    "name": entry.name,
-                    "path": self._virtual_path(entry),
-                    "type": kind,
-                }
-            )
-        return {"path": self._virtual_path(target), "entries": entries}
+        parts = self._workspace_parts(path)
+        directory_fd = self._open_directory_fd(parts)
+        try:
+            names = sorted(os.listdir(directory_fd))
+            if len(names) > _MAX_LIST_ENTRIES:
+                raise ValueError(
+                    f"workspace directory has more than {_MAX_LIST_ENTRIES} entries"
+                )
+            entries: list[dict[str, str]] = []
+            for name in names:
+                metadata = os.stat(
+                    name,
+                    dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+                if stat.S_ISLNK(metadata.st_mode):
+                    raise ValueError(
+                        f"workspace symlink path is forbidden: {name}"
+                    )
+                if stat.S_ISDIR(metadata.st_mode):
+                    kind = "directory"
+                elif stat.S_ISREG(metadata.st_mode):
+                    kind = "file"
+                else:
+                    kind = "other"
+                entries.append(
+                    {
+                        "name": name,
+                        "path": self._virtual_parts((*parts, name)),
+                        "type": kind,
+                    }
+                )
+        finally:
+            os.close(directory_fd)
+        return self._bounded_json_result(
+            {"path": self._virtual_parts(parts), "entries": entries}
+        )
 
     async def read_file(self, path: str) -> dict[str, Any]:
-        target = self._resolve_workspace_path(path, must_exist=True)
-        if not target.is_file():
-            raise ValueError("workspace path must be a file")
-        payload = self._read_bounded(target)
+        parts = self._workspace_parts(path)
+        parent_fd, name = self._open_parent_directory(parts)
+        try:
+            descriptor = self._open_regular_file(parent_fd, name)
+        finally:
+            os.close(parent_fd)
+        try:
+            payload = self._read_bounded_descriptor(descriptor)
+        finally:
+            os.close(descriptor)
         try:
             content = payload.decode("utf-8")
         except UnicodeDecodeError as error:
             raise ValueError("workspace file is not valid UTF-8") from error
         return {
-            "path": self._virtual_path(target),
+            "path": self._virtual_parts(parts),
             "content": content,
             "size_bytes": len(payload),
         }
@@ -90,24 +123,46 @@ class WorkspaceTools:
                 f"write content exceeds {self._max_output_bytes}-byte limit"
             )
 
-        target = self._resolve_workspace_path(path, must_exist=False)
-        parent = self._resolve_workspace_path(
-            str(Path(path).parent),
-            must_exist=True,
-        )
-        if not parent.is_dir():
-            raise ValueError("workspace parent path must be a directory")
-        if target.exists() and not target.is_file():
-            raise ValueError("workspace path must be a file")
-
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        descriptor = os.open(target, flags, 0o600)
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(payload)
+        parts = self._workspace_parts(path)
+        parent_fd, name = self._open_parent_directory(parts)
+        temporary_name = f".workspace-write-{secrets.token_hex(8)}"
+        temporary_created = False
+        try:
+            self._validate_existing_destination(parent_fd, name)
+            descriptor = os.open(
+                temporary_name,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | os.O_NOFOLLOW
+                | os.O_CLOEXEC,
+                0o600,
+                dir_fd=parent_fd,
+            )
+            temporary_created = True
+            try:
+                if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                    raise ValueError("temporary workspace path is not a regular file")
+                self._write_all(descriptor, payload)
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.replace(
+                temporary_name,
+                name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
+            temporary_created = False
+        finally:
+            if temporary_created:
+                try:
+                    os.unlink(temporary_name, dir_fd=parent_fd)
+                except FileNotFoundError:
+                    pass
+            os.close(parent_fd)
         return {
-            "path": self._virtual_path(target),
+            "path": self._virtual_parts(parts),
             "bytes_written": len(payload),
         }
 
@@ -124,48 +179,32 @@ class WorkspaceTools:
         if not command_cwd.is_dir():
             raise ValueError("command cwd must be a workspace directory")
 
-        try:
-            completed = subprocess.run(
-                normalized_argv,
-                shell=False,
-                cwd=command_cwd,
-                timeout=self._timeout_seconds,
-                capture_output=True,
-                env=_MINIMAL_ENV,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as error:
-            stdout, stdout_truncated = self._bounded_text(error.stdout or b"")
-            stderr, stderr_truncated = self._bounded_text(error.stderr or b"")
-            return self._command_result(
-                normalized_argv,
-                command_cwd,
-                exit_code=None,
-                stdout=stdout,
-                stderr=stderr,
-                timed_out=True,
-                truncated=stdout_truncated or stderr_truncated,
-            )
-
-        stdout, stdout_truncated = self._bounded_text(completed.stdout)
-        stderr, stderr_truncated = self._bounded_text(completed.stderr)
+        stdout_bytes, stderr_bytes, exit_code, timed_out, truncated = (
+            self._run_bounded_process(normalized_argv, command_cwd)
+        )
+        stdout, stderr = self._decode_bounded_outputs(stdout_bytes, stderr_bytes)
         return self._command_result(
             normalized_argv,
             command_cwd,
-            exit_code=completed.returncode,
+            exit_code=exit_code,
             stdout=stdout,
             stderr=stderr,
-            timed_out=False,
-            truncated=stdout_truncated or stderr_truncated,
+            timed_out=timed_out,
+            truncated=truncated,
         )
 
     async def list_skills(self) -> dict[str, Any]:
-        return {
+        summaries = discover_skills(self._skills_root)
+        if len(summaries) > _MAX_LIST_ENTRIES:
+            raise ValueError(
+                f"Skill catalog has more than {_MAX_LIST_ENTRIES} entries"
+            )
+        return self._bounded_json_result({
             "skills": [
                 {"name": summary.name, "description": summary.description}
-                for summary in discover_skills(self._skills_root)
+                for summary in summaries
             ]
-        }
+        })
 
     async def read_skill(self, name: str) -> dict[str, Any]:
         content = load_skill(
@@ -176,6 +215,7 @@ class WorkspaceTools:
         return {"name": name, "content": content}
 
     def _resolve_workspace_path(self, path: str, *, must_exist: bool) -> Path:
+        self._workspace_parts(path)
         if not isinstance(path, str) or not path or "\0" in path:
             raise ValueError("workspace path must be a non-empty string")
         if len(path.encode("utf-8")) > _MAX_PATH_BYTES:
@@ -198,6 +238,92 @@ class WorkspaceTools:
             raise ValueError("workspace path resolves outside /workspace") from error
         return resolved
 
+    def _workspace_parts(self, path: str) -> tuple[str, ...]:
+        if not isinstance(path, str) or not path or "\0" in path:
+            raise ValueError("workspace path must be a non-empty string")
+        if len(path.encode("utf-8")) > _MAX_PATH_BYTES:
+            raise ValueError(
+                f"workspace path exceeds {_MAX_PATH_BYTES}-byte limit"
+            )
+        relative = Path(path)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("workspace path must be relative to /workspace")
+        return tuple(part for part in relative.parts if part not in ("", "."))
+
+    def _open_parent_directory(
+        self,
+        parts: tuple[str, ...],
+    ) -> tuple[int, str]:
+        if not parts:
+            raise ValueError("workspace path must identify a file")
+        return self._open_directory_fd(parts[:-1]), parts[-1]
+
+    def _open_directory_fd(self, parts: tuple[str, ...]) -> int:
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        try:
+            descriptor = os.open(self._root, flags)
+            for part in parts:
+                try:
+                    child = os.open(part, flags, dir_fd=descriptor)
+                finally:
+                    os.close(descriptor)
+                descriptor = child
+        except OSError as error:
+            raise ValueError(
+                "workspace directory is unavailable or contains a symlink"
+            ) from error
+        return descriptor
+
+    @staticmethod
+    def _open_regular_file(parent_fd: int, name: str) -> int:
+        try:
+            descriptor = os.open(
+                name,
+                os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=parent_fd,
+            )
+        except OSError as error:
+            raise ValueError(
+                "workspace path is unavailable, a symlink, or not a regular file"
+            ) from error
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            os.close(descriptor)
+            raise ValueError("workspace path is not a regular file")
+        return descriptor
+
+    @staticmethod
+    def _validate_existing_destination(parent_fd: int, name: str) -> None:
+        try:
+            descriptor = os.open(
+                name,
+                os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=parent_fd,
+            )
+        except FileNotFoundError:
+            return
+        except OSError as error:
+            raise ValueError(
+                "workspace destination is unavailable or a symlink"
+            ) from error
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise ValueError("workspace destination is not a regular file")
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def _write_all(descriptor: int, payload: bytes) -> None:
+        offset = 0
+        while offset < len(payload):
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise OSError("workspace write made no progress")
+            offset += written
+
+    @staticmethod
+    def _virtual_parts(parts: tuple[str, ...]) -> str:
+        return str(_VIRTUAL_ROOT.joinpath(*parts))
+
     def _reject_symlink_components(self, candidate: Path) -> None:
         current = self._root
         try:
@@ -209,9 +335,8 @@ class WorkspaceTools:
             if current.is_symlink():
                 raise ValueError(f"workspace symlink path is forbidden: {part}")
 
-    def _read_bounded(self, target: Path) -> bytes:
-        with target.open("rb") as stream:
-            payload = stream.read(self._max_output_bytes + 1)
+    def _read_bounded_descriptor(self, descriptor: int) -> bytes:
+        payload = os.read(descriptor, self._max_output_bytes + 1)
         if len(payload) > self._max_output_bytes:
             raise ValueError(
                 f"workspace file exceeds {self._max_output_bytes}-byte limit"
@@ -240,10 +365,134 @@ class WorkspaceTools:
             )
         return normalized
 
-    def _bounded_text(self, payload: bytes) -> tuple[str, bool]:
-        truncated = len(payload) > self._max_output_bytes
-        bounded = payload[: self._max_output_bytes]
-        return bounded.decode("utf-8", errors="replace"), truncated
+    def _bounded_json_result(self, result: dict[str, Any]) -> dict[str, Any]:
+        encoded = json.dumps(
+            result,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if len(encoded) > self._max_output_bytes:
+            raise ValueError(
+                "serialized output exceeds "
+                f"{self._max_output_bytes}-byte limit"
+            )
+        return result
+
+    def _decode_bounded_outputs(
+        self,
+        stdout: bytes,
+        stderr: bytes,
+    ) -> tuple[str, str]:
+        remaining = self._max_output_bytes
+        decoded: list[str] = []
+        for payload in (stdout, stderr):
+            characters: list[str] = []
+            for character in payload.decode("utf-8", errors="replace"):
+                size = len(character.encode("utf-8"))
+                if size > remaining:
+                    break
+                characters.append(character)
+                remaining -= size
+            decoded.append("".join(characters))
+        return decoded[0], decoded[1]
+
+    def _run_bounded_process(
+        self,
+        argv: list[str],
+        cwd: Path,
+    ) -> tuple[bytes, bytes, int | None, bool, bool]:
+        process = subprocess.Popen(
+            argv,
+            shell=False,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=_MINIMAL_ENV,
+            start_new_session=True,
+            close_fds=True,
+        )
+        assert process.stdout is not None
+        assert process.stderr is not None
+
+        stdout_fd = process.stdout.fileno()
+        stderr_fd = process.stderr.fileno()
+        streams = {
+            stdout_fd: bytearray(),
+            stderr_fd: bytearray(),
+        }
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ)
+        selector.register(process.stderr, selectors.EVENT_READ)
+        deadline = time.monotonic() + self._timeout_seconds
+        timed_out = False
+        truncated = False
+
+        try:
+            while selector.get_map():
+                remaining_time = deadline - time.monotonic()
+                if remaining_time <= 0:
+                    timed_out = True
+                    self._kill_process_group(process)
+                    break
+
+                events = selector.select(remaining_time)
+                if not events:
+                    timed_out = True
+                    self._kill_process_group(process)
+                    break
+
+                for key, _ in events:
+                    try:
+                        chunk = os.read(key.fd, 65_536)
+                    except BlockingIOError:
+                        continue
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        key.fileobj.close()
+                        continue
+
+                    consumed = sum(len(buffer) for buffer in streams.values())
+                    available = self._max_output_bytes - consumed
+                    streams[key.fd].extend(chunk[:available])
+                    if len(chunk) >= available:
+                        truncated = True
+                        self._kill_process_group(process)
+                        break
+                if truncated:
+                    break
+        finally:
+            selector.close()
+            for stream in (process.stdout, process.stderr):
+                if not stream.closed:
+                    stream.close()
+
+        if not timed_out and not truncated:
+            remaining_time = max(0.0, deadline - time.monotonic())
+            try:
+                process.wait(timeout=remaining_time)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                self._kill_process_group(process)
+
+        exit_code = None if timed_out or truncated else process.returncode
+        return (
+            bytes(streams[stdout_fd]),
+            bytes(streams[stderr_fd]),
+            exit_code,
+            timed_out,
+            truncated,
+        )
+
+    @staticmethod
+    def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError("command process could not be reaped") from error
 
     def _virtual_path(self, path: Path) -> str:
         relative = path.relative_to(self._root)
