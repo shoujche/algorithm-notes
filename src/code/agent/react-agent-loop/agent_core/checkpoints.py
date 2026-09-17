@@ -55,11 +55,25 @@ _SENSITIVE_KEY_PARTS = frozenset(
 )
 _PLACEHOLDER_VALUES = frozenset({"", "replace-me", "your-key-here"})
 _STRING_LABEL_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
+_ALLOWED_TOKEN_METRICS = frozenset(
+    {
+        "input_tokens",
+        "max_tokens",
+        "output_tokens",
+        "token_budget",
+        "token_count",
+        "total_tokens",
+    }
+)
+
+
+def _normalize_key(key: str) -> str:
+    snake_case = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key)
+    return re.sub(r"[^a-z0-9]+", "_", snake_case.lower()).strip("_")
 
 
 def _key_may_hold_secret(key: str) -> bool:
-    snake_case = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key)
-    normalized = re.sub(r"[^a-z0-9]+", "_", snake_case.lower()).strip("_")
+    normalized = _normalize_key(key)
     parts = set(normalized.split("_"))
     if parts & _SENSITIVE_KEY_PARTS:
         return True
@@ -77,17 +91,10 @@ def _contains_sensitive_assignment(value: str) -> bool:
         if not remainder_lines:
             continue
         remainder = remainder_lines[0]
-        assigned: str | None = None
-        explicit_separator = re.match(r"^\s*[:=]\s*(.*)$", remainder)
-        if explicit_separator is not None:
-            assigned = explicit_separator.group(1)
-        elif remainder.startswith(("'", '"')):
-            assigned = remainder
-        elif remainder[:1].isspace():
-            assigned = remainder.lstrip()
-
-        if assigned is None:
+        assignment = re.match(r"""^\s*["']?\s*[:=]\s*(.*)$""", remainder)
+        if assignment is None:
             continue
+        assigned = assignment.group(1)
         normalized_value = assigned.strip().strip("'\"").strip().lower()
         if normalized_value not in _PLACEHOLDER_VALUES:
             return True
@@ -103,6 +110,11 @@ def _value_looks_like_secret(value: str) -> bool:
 def _contains_secret(value: Any) -> bool:
     if isinstance(value, Mapping):
         for key, child in value.items():
+            normalized_key = _normalize_key(str(key))
+            if normalized_key in _ALLOWED_TOKEN_METRICS:
+                if type(child) is int and child >= 0:
+                    continue
+                return True
             if _key_may_hold_secret(str(key)) or _contains_secret(child):
                 return True
     elif isinstance(value, (list, tuple)):

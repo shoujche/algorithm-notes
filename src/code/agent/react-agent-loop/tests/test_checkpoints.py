@@ -151,13 +151,14 @@ def test_checkpoint_rejects_nested_secret_key_variants(
     [
         "TOKEN=opaque-value-1234567890",
         "SECRET: opaque-value-1234567890",
-        'PASSWORD "opaque-value-1234567890"',
-        "CREDENTIAL opaque-value-1234567890",
+        'PASSWORD = "opaque-value-1234567890"',
+        "CREDENTIAL: opaque-value-1234567890",
         "AUTHORIZATION='opaque-value-1234567890'",
         "API_KEY: opaque-value-1234567890",
-        "PRIVATE_KEY opaque-value-1234567890",
+        "PRIVATE_KEY = opaque-value-1234567890",
         "githubToken = opaque-value-1234567890",
         "service-token: opaque-value-1234567890",
+        '"Authorization": "Bearer opaque-value-1234567890"',
     ],
 )
 def test_checkpoint_rejects_sensitive_assignments_in_nested_write_content(
@@ -200,6 +201,75 @@ def test_checkpoint_allows_placeholder_assignments_in_nested_strings(tmp_path) -
                 }
             ]
         },
+    )
+
+    store.save(state)
+
+    assert store.load(state.run_id) == state
+
+
+@pytest.mark.parametrize(
+    ("metric_key", "metric_value"),
+    [
+        ("input_tokens", 12),
+        ("output_tokens", 8),
+        ("total_tokens", 20),
+        ("token_count", 20),
+        ("token_budget", 100),
+        ("max_tokens", 200),
+    ],
+)
+def test_checkpoint_allows_non_negative_token_metrics(
+    tmp_path,
+    metric_key: str,
+    metric_value: int,
+) -> None:
+    store = JsonCheckpointStore(tmp_path / ".runs")
+    state = RunState(
+        run_id="run-token-metric",
+        response_state={
+            "usage": {metric_key: metric_value},
+            "history": [{"metrics": {metric_key: metric_value}}],
+        },
+    )
+
+    store.save(state)
+
+    assert store.load(state.run_id) == state
+
+
+@pytest.mark.parametrize("invalid_value", [-1, 1.5, "12", True])
+def test_checkpoint_rejects_invalid_token_metric_values(
+    tmp_path,
+    invalid_value: object,
+) -> None:
+    store = JsonCheckpointStore(tmp_path / ".runs")
+    state = RunState(
+        run_id="run-invalid-token-metric",
+        response_state={"usage": {"input_tokens": invalid_value}},
+    )
+
+    with pytest.raises(ValueError, match="secret"):
+        store.save(state)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "token budget exceeded",
+        "password policy",
+        "credential rotation guide",
+        "authorization overview",
+    ],
+)
+def test_checkpoint_allows_sensitive_words_in_ordinary_text(
+    tmp_path,
+    text: str,
+) -> None:
+    store = JsonCheckpointStore(tmp_path / ".runs")
+    state = RunState(
+        run_id="run-ordinary-text",
+        response_state={"messages": [{"content": text}]},
     )
 
     store.save(state)
