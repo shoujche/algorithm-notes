@@ -1,0 +1,157 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import pytest
+
+from agent_core.skills import SkillSummary, list_skills, read_skill
+
+
+def write_skill(
+    root: Path,
+    directory: str,
+    *,
+    name: str | None = None,
+    description: str | None = "A test Skill.",
+    body: str = "Follow these instructions.",
+) -> Path:
+    skill_dir = root / directory
+    skill_dir.mkdir(parents=True)
+    fields = [f"name: {name or directory}"]
+    if description is not None:
+        fields.append(f"description: {description}")
+    content = f"---\n{'\n'.join(fields)}\n---\n\n{body}\n"
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text(content, encoding="utf-8")
+    return skill_file
+
+
+def test_list_skills_parses_frontmatter_and_sorts_by_name(tmp_path: Path) -> None:
+    write_skill(
+        tmp_path,
+        "zeta-directory",
+        name="zeta",
+        description="Use the zeta workflow.",
+        body="This body must remain progressively undisclosed.",
+    )
+    write_skill(
+        tmp_path,
+        "alpha-directory",
+        name="alpha",
+        description="Use the alpha workflow.",
+    )
+
+    assert list_skills(tmp_path) == [
+        SkillSummary(name="alpha", description="Use the alpha workflow."),
+        SkillSummary(name="zeta", description="Use the zeta workflow."),
+    ]
+
+
+def test_read_skill_returns_the_complete_utf8_document(tmp_path: Path) -> None:
+    skill_file = write_skill(
+        tmp_path,
+        "workspace-helper",
+        description="安全地协助工作区。",
+        body="先检查，再编辑。",
+    )
+
+    assert read_skill(tmp_path, "workspace-helper") == skill_file.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_list_skills_rejects_missing_description(tmp_path: Path) -> None:
+    write_skill(tmp_path, "missing-description", description=None)
+
+    with pytest.raises(ValueError, match="description"):
+        list_skills(tmp_path)
+
+
+def test_list_skills_rejects_duplicate_declared_names(tmp_path: Path) -> None:
+    write_skill(tmp_path, "first", name="duplicate")
+    write_skill(tmp_path, "second", name="duplicate")
+
+    with pytest.raises(ValueError, match="duplicate"):
+        list_skills(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Uppercase",
+        "-leading-hyphen",
+        "contains_underscore",
+        "contains space",
+        "a" * 65,
+    ],
+)
+def test_list_skills_rejects_invalid_frontmatter_names(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    write_skill(tmp_path, "invalid", name=name)
+
+    with pytest.raises(ValueError, match="name"):
+        list_skills(tmp_path)
+
+
+def test_list_skills_uses_safe_yaml_parsing(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "unsafe-yaml"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: unsafe-yaml\n"
+        "description: !!python/object/apply:builtins.str [unsafe]\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="frontmatter"):
+        list_skills(tmp_path)
+
+
+def test_read_skill_rejects_files_over_the_byte_limit(tmp_path: Path) -> None:
+    write_skill(tmp_path, "large", body="é" * 100)
+
+    with pytest.raises(ValueError, match="byte limit"):
+        read_skill(tmp_path, "large", max_bytes=100)
+
+
+@pytest.mark.parametrize("name", ["/tmp/escape", "../escape", "nested/escape", "."])
+def test_read_skill_rejects_absolute_and_traversal_names(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    with pytest.raises(ValueError, match="name"):
+        read_skill(tmp_path, name)
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "symlink"),
+    reason="symbolic links are unavailable",
+)
+def test_read_skill_rejects_symlink_escape(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    write_skill(outside, "escaped")
+    (root / "escaped").symlink_to(outside / "escaped", target_is_directory=True)
+
+    with pytest.raises(ValueError, match="outside"):
+        read_skill(root, "escaped")
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "symlink"),
+    reason="symbolic links are unavailable",
+)
+def test_list_skills_rejects_symlink_escape(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    write_skill(outside, "escaped")
+    (root / "escaped").symlink_to(outside / "escaped", target_is_directory=True)
+
+    with pytest.raises(ValueError, match="outside"):
+        list_skills(root)
