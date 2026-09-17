@@ -136,6 +136,21 @@ def test_read_skill_rejects_files_over_the_byte_limit(tmp_path: Path) -> None:
         read_skill(tmp_path, "large", max_bytes=100)
 
 
+def test_read_skill_rejects_large_file_at_default_byte_limit(tmp_path: Path) -> None:
+    write_skill(tmp_path, "default-limit", body="x" * 33_000)
+
+    with pytest.raises(ValueError, match="32768-byte limit"):
+        read_skill(tmp_path, "default-limit")
+
+
+def test_read_skill_honors_custom_limit_above_default(tmp_path: Path) -> None:
+    skill_file = write_skill(tmp_path, "custom-limit", body="x" * 33_000)
+
+    assert read_skill(tmp_path, "custom-limit", max_bytes=40_000) == (
+        skill_file.read_text(encoding="utf-8")
+    )
+
+
 @pytest.mark.parametrize("name", ["/tmp/escape", "../escape", "nested/escape", "."])
 def test_read_skill_rejects_absolute_and_traversal_names(
     tmp_path: Path,

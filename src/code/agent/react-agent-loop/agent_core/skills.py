@@ -30,7 +30,7 @@ def read_skill(root: Path, name: str, max_bytes: int = _DEFAULT_MAX_BYTES) -> st
     if max_bytes < 0:
         raise ValueError("max_bytes must be non-negative")
 
-    skills = _discover_skills(root)
+    skills = _discover_skills(root, max_bytes=max_bytes)
     try:
         _, skill_file = skills[name]
     except KeyError as error:
@@ -38,7 +38,10 @@ def read_skill(root: Path, name: str, max_bytes: int = _DEFAULT_MAX_BYTES) -> st
     return _read_utf8(skill_file, max_bytes)
 
 
-def _discover_skills(root: Path) -> dict[str, tuple[SkillSummary, Path]]:
+def _discover_skills(
+    root: Path,
+    max_bytes: int = _DEFAULT_MAX_BYTES,
+) -> dict[str, tuple[SkillSummary, Path]]:
     if root.is_symlink():
         raise ValueError("Skill symlink path is forbidden")
     trusted_root = root.resolve()
@@ -60,7 +63,7 @@ def _discover_skills(root: Path) -> dict[str, tuple[SkillSummary, Path]]:
             )
 
         safe_file = _resolve_beneath(trusted_root, skill_file)
-        content = _read_utf8(safe_file, _DEFAULT_MAX_BYTES)
+        content = _read_utf8(safe_file, max_bytes)
         summary = _parse_summary(content, safe_file)
         if summary.name in skills:
             raise ValueError(f"duplicate Skill name: {summary.name}")
