@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import agent_core.sandbox
 from agent_core.sandbox import DockerMCPTransport, DockerSandboxConfig
 
 
@@ -55,7 +56,7 @@ def test_build_argv_mounts_only_resolved_workspace_and_skills(
     ]
 
     assert mounts == [
-        f"type=bind,src={workspace.resolve()},dst=/workspace,rw",
+        f"type=bind,src={workspace.resolve()},dst=/workspace",
         f"type=bind,src={skills.resolve()},dst=/skills,readonly",
     ]
 
@@ -116,10 +117,17 @@ def test_transport_exposes_stdio_parameters_without_host_environment(
     skills.mkdir()
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-enter-container")
     monkeypatch.setenv("UNRELATED_HOST_VARIABLE", "also-not-forwarded")
+    monkeypatch.setattr(
+        agent_core.sandbox.shutil,
+        "which",
+        lambda command: "/opt/docker/bin/docker",
+    )
 
-    parameters = DockerMCPTransport().parameters(workspace, skills)
+    transport = DockerMCPTransport()
+    parameters = transport.parameters(workspace, skills)
 
-    assert parameters.command == "docker"
+    assert parameters.command == "/opt/docker/bin/docker"
+    assert transport.build_argv(workspace, skills)[0] == parameters.command
     assert parameters.args[:2] == ["run", "--rm"]
     assert parameters.env == {}
     serialized = "\0".join([parameters.command, *parameters.args])
@@ -129,3 +137,30 @@ def test_transport_exposes_stdio_parameters_without_host_environment(
     assert "must-not-enter-container" not in serialized
     assert "UNRELATED_HOST_VARIABLE" not in serialized
     assert "also-not-forwarded" not in serialized
+
+
+def test_transport_fails_clearly_when_docker_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(agent_core.sandbox.shutil, "which", lambda command: None)
+
+    with pytest.raises(RuntimeError, match="Docker executable.*not found"):
+        DockerMCPTransport()
+
+
+def test_transport_normalizes_resolved_docker_command_to_absolute_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        agent_core.sandbox.shutil,
+        "which",
+        lambda command: "relative/bin/docker",
+    )
+
+    transport = DockerMCPTransport()
+
+    assert transport.docker_command == str(
+        (tmp_path / "relative/bin/docker").resolve()
+    )

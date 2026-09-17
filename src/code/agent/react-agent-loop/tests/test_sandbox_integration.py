@@ -1,22 +1,14 @@
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from agent_core.sandbox import DockerSandboxConfig
+from agent_core.sandbox import DockerMCPTransport
 
 pytestmark = pytest.mark.docker
-
-
-def _with_absolute_docker(argv: list[str]) -> list[str]:
-    docker = shutil.which(argv[0])
-    if docker is None:
-        pytest.fail(f"Docker executable is unavailable: {argv[0]}")
-    return [docker, *argv[1:]]
 
 
 def test_container_enforces_runtime_isolation_and_persists_workspace(
@@ -45,10 +37,10 @@ result = {
 }
 try:
     socket.create_connection(("1.1.1.1", 53), timeout=0.5)
-except OSError:
-    result["network_blocked"] = True
+except OSError as error:
+    result["network_error"] = errno.errorcode.get(error.errno)
 else:
-    result["network_blocked"] = False
+    result["network_error"] = None
 
 try:
     Path("/home/agent/rootfs-write.txt").write_text("forbidden")
@@ -60,14 +52,14 @@ else:
 Path("/workspace/persisted.txt").write_text("persisted", encoding="utf-8")
 print(json.dumps(result))
 """.replace("__HOST_SENTINEL__", repr(str(host_sentinel)))
-    config = DockerSandboxConfig()
-    argv = config.build_argv(workspace, skills)
+    transport = DockerMCPTransport()
+    argv = transport.build_argv(workspace, skills)
     argv[-1:-1] = [
         "--entrypoint",
         "python",
     ]
     completed = subprocess.run(
-        [*_with_absolute_docker(argv), "-c", probe],
+        [*argv, "-c", probe],
         check=True,
         capture_output=True,
         text=True,
@@ -75,13 +67,18 @@ print(json.dumps(result))
         timeout=30,
     )
     result = json.loads(completed.stdout)
+    network_error = result.pop("network_error")
 
     assert result == {
         "uid": 10001,
         "api_key_present": False,
         "host_file_visible": False,
-        "network_blocked": True,
         "rootfs_read_only": True,
+    }
+    assert network_error in {
+        "ENETDOWN",
+        "ENETUNREACH",
+        "EHOSTUNREACH",
     }
     assert (workspace / "persisted.txt").read_text(encoding="utf-8") == "persisted"
 
@@ -97,15 +94,14 @@ def test_image_entrypoint_serves_mcp_over_stdio(tmp_path: Path) -> None:
         '"clientInfo":{"name":"integration-test","version":"1"}}}\n'
     )
 
+    parameters = DockerMCPTransport().parameters(workspace, skills)
     completed = subprocess.run(
-        _with_absolute_docker(
-            DockerSandboxConfig().build_argv(workspace, skills)
-        ),
+        [parameters.command, *parameters.args],
         input=request,
         check=True,
         capture_output=True,
         text=True,
-        env={},
+        env=parameters.env,
         timeout=30,
     )
 

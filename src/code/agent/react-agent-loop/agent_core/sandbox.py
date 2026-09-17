@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -47,7 +48,7 @@ class DockerSandboxConfig:
             "--tmpfs",
             self.tmpfs,
             "--mount",
-            f"type=bind,src={resolved_workspace},dst=/workspace,rw",
+            f"type=bind,src={resolved_workspace},dst=/workspace",
             "--mount",
             f"type=bind,src={resolved_skills},dst=/skills,readonly",
             self.image,
@@ -69,13 +70,31 @@ class DockerSandboxConfig:
 @dataclass(frozen=True)
 class DockerMCPTransport:
     config: DockerSandboxConfig = field(default_factory=DockerSandboxConfig)
+    docker_command: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        docker_command = shutil.which(self.config.docker_command)
+        if docker_command is None:
+            raise RuntimeError(
+                f"Docker executable '{self.config.docker_command}' not found on PATH"
+            )
+        object.__setattr__(
+            self,
+            "docker_command",
+            str(Path(docker_command).resolve()),
+        )
+
+    def build_argv(self, workspace: Path, skills_dir: Path) -> list[str]:
+        argv = self.config.build_argv(workspace, skills_dir)
+        argv[0] = self.docker_command
+        return argv
 
     def parameters(
         self,
         workspace: Path,
         skills_dir: Path,
     ) -> StdioServerParameters:
-        argv = self.config.build_argv(workspace, skills_dir)
+        argv = self.build_argv(workspace, skills_dir)
         return StdioServerParameters(
             command=argv[0],
             args=argv[1:],
