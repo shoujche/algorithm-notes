@@ -39,34 +39,65 @@ _SECRET_VALUE_PATTERNS = (
     ),
     re.compile(r"-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----"),
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}"),
-    re.compile(
-        r"""(?ix)
-        \b(?:[a-z0-9]+[_-])*
-        (?:api[_-]?key|client[_-]?secret|password|
-           access[_-]?token|refresh[_-]?token|private[_-]?key)
-        \b\s*[:=]\s*["']?[^\s"']{4,}
-        """
-    ),
 )
+_SENSITIVE_KEY_PARTS = frozenset(
+    {
+        "authorization",
+        "credential",
+        "credentials",
+        "password",
+        "passwd",
+        "secret",
+        "secrets",
+        "token",
+        "tokens",
+    }
+)
+_PLACEHOLDER_VALUES = frozenset({"", "replace-me", "your-key-here"})
+_STRING_LABEL_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
 
 
 def _key_may_hold_secret(key: str) -> bool:
     snake_case = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key)
     normalized = re.sub(r"[^a-z0-9]+", "_", snake_case.lower()).strip("_")
     parts = set(normalized.split("_"))
-    if parts & {"secret", "password", "passwd", "credential", "credentials"}:
-        return True
-    if normalized in {"authorization", "privatekey", "apikey", "token"}:
+    if parts & _SENSITIVE_KEY_PARTS:
         return True
     if {"api", "key"} <= parts or {"private", "key"} <= parts:
         return True
-    return "token" in parts and bool(
-        parts & {"access", "auth", "bearer", "id", "refresh"}
-    )
+    return normalized in {"apikey", "privatekey"}
+
+
+def _contains_sensitive_assignment(value: str) -> bool:
+    for label in _STRING_LABEL_PATTERN.finditer(value):
+        if not _key_may_hold_secret(label.group()):
+            continue
+
+        remainder_lines = value[label.end() :].splitlines()
+        if not remainder_lines:
+            continue
+        remainder = remainder_lines[0]
+        assigned: str | None = None
+        explicit_separator = re.match(r"^\s*[:=]\s*(.*)$", remainder)
+        if explicit_separator is not None:
+            assigned = explicit_separator.group(1)
+        elif remainder.startswith(("'", '"')):
+            assigned = remainder
+        elif remainder[:1].isspace():
+            assigned = remainder.lstrip()
+
+        if assigned is None:
+            continue
+        normalized_value = assigned.strip().strip("'\"").strip().lower()
+        if normalized_value not in _PLACEHOLDER_VALUES:
+            return True
+    return False
 
 
 def _value_looks_like_secret(value: str) -> bool:
-    return any(pattern.search(value) for pattern in _SECRET_VALUE_PATTERNS)
+    return _contains_sensitive_assignment(value) or any(
+        pattern.search(value) for pattern in _SECRET_VALUE_PATTERNS
+    )
 
 
 def _contains_secret(value: Any) -> bool:

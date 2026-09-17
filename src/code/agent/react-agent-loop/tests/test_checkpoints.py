@@ -106,7 +106,29 @@ def test_checkpoint_rejects_secret_bearing_state(tmp_path) -> None:
 
 @pytest.mark.parametrize(
     "secret_key",
-    ["openai_api_key", "client_secret", "service-password", "refreshToken", "token"],
+    [
+        "github_token",
+        "service-token",
+        "serviceToken",
+        "client_secret",
+        "client-secret",
+        "clientSecret",
+        "db_password",
+        "db-password",
+        "dbPassword",
+        "cloud_credential",
+        "cloud-credential",
+        "cloudCredential",
+        "request_authorization",
+        "request-authorization",
+        "requestAuthorization",
+        "openai_api_key",
+        "openai-api-key",
+        "openaiApiKey",
+        "signing_private_key",
+        "signing-private-key",
+        "signingPrivateKey",
+    ],
 )
 def test_checkpoint_rejects_nested_secret_key_variants(
     tmp_path,
@@ -115,13 +137,74 @@ def test_checkpoint_rejects_nested_secret_key_variants(
     store = JsonCheckpointStore(tmp_path / ".runs")
     state = RunState(
         run_id="run-secret-key",
-        response_state={"provider": {"configuration": {secret_key: "sensitive"}}},
+        response_state={"provider": {"configuration": {secret_key: "replace-me"}}},
     )
 
     with pytest.raises(ValueError, match="secret"):
         store.save(state)
 
     assert store.load(state.run_id) is None
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "TOKEN=opaque-value-1234567890",
+        "SECRET: opaque-value-1234567890",
+        'PASSWORD "opaque-value-1234567890"',
+        "CREDENTIAL opaque-value-1234567890",
+        "AUTHORIZATION='opaque-value-1234567890'",
+        "API_KEY: opaque-value-1234567890",
+        "PRIVATE_KEY opaque-value-1234567890",
+        "githubToken = opaque-value-1234567890",
+        "service-token: opaque-value-1234567890",
+    ],
+)
+def test_checkpoint_rejects_sensitive_assignments_in_nested_write_content(
+    tmp_path,
+    content: str,
+) -> None:
+    store = JsonCheckpointStore(tmp_path / ".runs")
+    proposal = ToolProposal(
+        "call-sensitive-label",
+        "write_file",
+        {"path": "notes.txt", "content": content},
+    )
+    request = ApprovalRequest(
+        proposal=proposal,
+        risk=Risk.APPROVAL,
+        normalized_arguments="synthetic",
+        preview="synthetic",
+        digest="digest",
+    )
+    state = replace(sample_state("run-sensitive-label"), pending_approval=request)
+
+    with pytest.raises(ValueError, match="secret"):
+        store.save(state)
+
+    assert store.load(state.run_id) is None
+
+
+def test_checkpoint_allows_placeholder_assignments_in_nested_strings(tmp_path) -> None:
+    store = JsonCheckpointStore(tmp_path / ".runs")
+    state = RunState(
+        run_id="run-placeholders",
+        response_state={
+            "messages": [
+                {
+                    "content": (
+                        "OPENAI_API_KEY=\n"
+                        "CLIENT_SECRET=your-key-here\n"
+                        "TOKEN=replace-me"
+                    )
+                }
+            ]
+        },
+    )
+
+    store.save(state)
+
+    assert store.load(state.run_id) == state
 
 
 def test_checkpoint_rejects_credentials_inside_pending_write_content(tmp_path) -> None:
