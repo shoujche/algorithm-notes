@@ -4,9 +4,16 @@ dist/
 
 # dependencies
 node_modules/
+__pycache__/
+*.py[cod]
+src/code/agent/react-agent-loop/.venv/
 
 # astro
 .astro/
+
+# ReAct Agent runtime state
+src/code/agent/react-agent-loop/.runs/
+src/code/agent/react-agent-loop/workspace/
 
 # env
 .env
