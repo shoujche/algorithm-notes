@@ -4,6 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "langchain>=1.0,<2",
+    "langchain-openai>=1.0,<2",
     "langgraph>=1.0,<2",
     "mcp>=1.0,<2",
     "openai>=2.0,<3",
