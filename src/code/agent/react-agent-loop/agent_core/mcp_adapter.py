@@ -15,6 +15,12 @@ class MCPToolClient:
         listed = await self._session.list_tools()
         tools: list[dict[str, Any]] = []
         for tool in listed.tools:
+            if not isinstance(tool.inputSchema, Mapping) or tool.inputSchema.get(
+                "type"
+            ) != "object":
+                raise ValueError(
+                    f"tool {tool.name} function parameter root must be object"
+                )
             parameters = _strict_schema(tool.inputSchema, f"tool {tool.name}")
             tools.append(
                 {
@@ -30,12 +36,13 @@ class MCPToolClient:
     async def call(self, name: str, arguments: dict[str, Any]) -> str:
         result = await self._session.call_tool(name, arguments)
         if result.structuredContent is not None:
-            payload: Any = result.structuredContent
+            content: Any = result.structuredContent
         else:
-            payload = {
-                "is_error": bool(result.isError),
-                "content": [_content_value(item) for item in result.content],
-            }
+            content = [_content_value(item) for item in result.content]
+        payload = {
+            "is_error": bool(result.isError),
+            "content": content,
+        }
         return json.dumps(
             payload,
             ensure_ascii=False,

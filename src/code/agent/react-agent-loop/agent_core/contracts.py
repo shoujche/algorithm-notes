@@ -95,6 +95,20 @@ class RunState:
     max_tool_calls: int = 0
     pending_approval: ApprovalRequest | None = None
     executed_call_ids: frozenset[str] = field(default_factory=frozenset)
+    approved_call_digests: Mapping[str, str] = field(default_factory=dict)
+    rejected_call_reasons: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "approved_call_digests",
+            FrozenMapping(self.approved_call_digests),
+        )
+        object.__setattr__(
+            self,
+            "rejected_call_reasons",
+            FrozenMapping(self.rejected_call_reasons),
+        )
 
 
 @dataclass(frozen=True)

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
 import tempfile
 from collections.abc import Mapping
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .contracts import ApprovalRequest, Risk, RunState, ToolProposal, to_json_value
 
@@ -21,6 +23,8 @@ _STATE_FIELDS = frozenset(
         "max_tool_calls",
         "pending_approval",
         "executed_call_ids",
+        "approved_call_digests",
+        "rejected_call_reasons",
     }
 )
 _APPROVAL_FIELDS = frozenset(
@@ -65,6 +69,10 @@ _ALLOWED_TOKEN_METRICS = frozenset(
         "total_tokens",
     }
 )
+
+
+class RunClaimedError(RuntimeError):
+    pass
 
 
 def _normalize_key(key: str) -> str:
@@ -156,6 +164,8 @@ def _state_to_dict(state: RunState) -> dict[str, Any]:
             else None
         ),
         "executed_call_ids": sorted(state.executed_call_ids),
+        "approved_call_digests": to_json_value(state.approved_call_digests),
+        "rejected_call_reasons": to_json_value(state.rejected_call_reasons),
     }
 
 
@@ -182,6 +192,13 @@ def _validate_checkpoint_schema(data: Any) -> Mapping[str, Any]:
         raise ValueError("response_state must be a JSON object")
     if not isinstance(state_data["executed_call_ids"], list):
         raise ValueError("executed_call_ids must be a JSON array")
+    for field_name in ("approved_call_digests", "rejected_call_reasons"):
+        values = state_data[field_name]
+        if not isinstance(values, Mapping) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in values.items()
+        ):
+            raise ValueError(f"{field_name} must map strings to strings")
 
     approval_data = state_data["pending_approval"]
     if approval_data is not None:
@@ -228,6 +245,8 @@ def _state_from_dict(data: dict[str, Any]) -> RunState:
         max_tool_calls=data.get("max_tool_calls", 0),
         pending_approval=approval,
         executed_call_ids=frozenset(data.get("executed_call_ids", [])),
+        approved_call_digests=data.get("approved_call_digests", {}),
+        rejected_call_reasons=data.get("rejected_call_reasons", {}),
     )
 
 
@@ -239,6 +258,26 @@ class JsonCheckpointStore:
         if not _RUN_ID_PATTERN.fullmatch(run_id):
             raise ValueError("run_id may contain only letters, digits, '-' and '_'")
         return self.directory / f"{run_id}.json"
+
+    @contextmanager
+    def claim(self, run_id: str) -> Iterator[None]:
+        self._path_for(run_id)
+        self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.directory, 0o700)
+        lock_path = self.directory / f"{run_id}.lock"
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        os.chmod(lock_path, 0o600)
+        try:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise RunClaimedError(
+                    f"run {run_id!r} is already claimed"
+                ) from error
+            yield
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
 
     def save(self, state: RunState) -> None:
         destination = self._path_for(state.run_id)

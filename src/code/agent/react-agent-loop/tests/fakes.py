@@ -69,6 +69,18 @@ class FakeMCPClient:
             },
             {
                 "type": "function",
+                "name": "read_file",
+                "description": "Read a file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            },
+            {
+                "type": "function",
                 "name": "write_file",
                 "description": "Write a file.",
                 "parameters": {

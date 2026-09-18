@@ -1124,6 +1124,7 @@ name = "react-agent-loop"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "jsonschema" },
     { name = "langchain" },
     { name = "langgraph" },
     { name = "mcp" },
@@ -1140,6 +1141,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "jsonschema", specifier = ">=4.0,<5" },
     { name = "langchain", specifier = ">=1.0,<2" },
     { name = "langgraph", specifier = ">=1.0,<2" },
     { name = "mcp", specifier = ">=1.0,<2" },

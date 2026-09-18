@@ -7,6 +7,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError, ValidationError
+
 from .checkpoints import JsonCheckpointStore
 from .contracts import Risk, RunOutcome, RunState, ToolProposal, to_json_value
 from .policy import ToolPolicy
@@ -79,6 +82,14 @@ class OpenAIReActAgent:
         run_id: str,
         decision: ResumeDecision,
     ) -> RunOutcome:
+        with self._checkpoints.claim(run_id):
+            return await self._resume_claimed(run_id, decision)
+
+    async def _resume_claimed(
+        self,
+        run_id: str,
+        decision: ResumeDecision,
+    ) -> RunOutcome:
         state = self._checkpoints.load(run_id)
         if state is None:
             raise ValueError(f"run {run_id!r} was not found")
@@ -96,40 +107,47 @@ class OpenAIReActAgent:
         response_state = state.response_state
         response_id = _required_string(response_state, "response_id")
         calls = _stored_calls(response_state)
-        outputs = _stored_outputs(response_state)
         proposal = pending.proposal
 
         if decision.action == "reject":
-            outputs[proposal.call_id] = _json_output(
-                {"error": "rejected", "reason": decision.reason}
+            state = replace(
+                state,
+                pending_approval=None,
+                rejected_call_reasons={
+                    **to_json_value(state.rejected_call_reasons),
+                    proposal.call_id: decision.reason,
+                },
             )
-            state = replace(state, pending_approval=None)
-            approved_call_ids: frozenset[str] = frozenset()
         else:
-            if decision.arguments is not None:
-                proposal = ToolProposal(
-                    proposal.call_id,
-                    proposal.tool_name,
-                    decision.arguments,
-                )
+            arguments = (
+                decision.arguments
+                if decision.arguments is not None
+                else proposal.arguments
+            )
+            self._validate_tool_arguments(proposal.tool_name, arguments)
+            proposal = ToolProposal(
+                proposal.call_id,
+                proposal.tool_name,
+                arguments,
+            )
             if self._policy.classify(proposal) is not Risk.APPROVAL:
                 raise ValueError("edited proposal is not approvable")
-            if decision.arguments is not None:
-                for call in calls:
-                    if call["call_id"] == proposal.call_id:
-                        call["arguments"] = _json_output(decision.arguments)
-            state = replace(state, pending_approval=None)
-            approved_call_ids = frozenset({proposal.call_id})
+            rebound = self._policy.approval_for(proposal)
+            for call in calls:
+                if call["call_id"] == proposal.call_id:
+                    call["arguments"] = rebound.normalized_arguments
+            state = replace(
+                state,
+                pending_approval=None,
+                approved_call_digests={
+                    **to_json_value(state.approved_call_digests),
+                    proposal.call_id: rebound.digest,
+                },
+            )
 
         try:
             async with asyncio.timeout(self._timeout_seconds):
-                return await self._process_calls(
-                    state,
-                    response_id,
-                    calls,
-                    outputs,
-                    approved_call_ids,
-                )
+                return await self._process_calls(state, response_id, calls)
         except TimeoutError as error:
             raise BudgetExceeded("total timeout budget exceeded") from error
 
@@ -142,7 +160,12 @@ class OpenAIReActAgent:
         if state.turn >= state.max_turns:
             raise BudgetExceeded("model turn budget exceeded")
         response = await self._create_response(model_input, previous_response_id)
-        state = replace(state, turn=state.turn + 1)
+        state = replace(
+            state,
+            turn=state.turn + 1,
+            approved_call_digests={},
+            rejected_call_reasons={},
+        )
         response_id = _required_string(response, "id")
         calls = [
             _call_to_stored(item)
@@ -163,52 +186,60 @@ class OpenAIReActAgent:
         if state.tool_calls + unique_count > state.max_tool_calls:
             raise BudgetExceeded("tool call budget exceeded")
         state = replace(state, tool_calls=state.tool_calls + unique_count)
-        return await self._process_calls(state, response_id, calls, {})
+        return await self._process_calls(state, response_id, calls)
 
     async def _process_calls(
         self,
         state: RunState,
         response_id: str,
         calls: list[dict[str, str]],
-        outputs: dict[str, str],
-        approved_call_ids: frozenset[str] = frozenset(),
     ) -> RunOutcome:
         parsed: dict[str, ToolProposal | None] = {}
+        parse_errors: dict[str, dict[str, str]] = {}
         seen: set[str] = set()
         for call in calls:
             call_id = call["call_id"]
             if call_id in seen:
                 continue
             seen.add(call_id)
-            if call_id in outputs:
-                continue
             try:
                 arguments = json.loads(call["arguments"])
                 if not isinstance(arguments, dict):
                     raise ValueError("arguments must be a JSON object")
+                if self._policy.classify(
+                    ToolProposal(call_id, call["name"], arguments)
+                ) is not Risk.DENY:
+                    self._validate_tool_arguments(call["name"], arguments)
                 parsed[call_id] = ToolProposal(call_id, call["name"], arguments)
             except (json.JSONDecodeError, TypeError, ValueError) as error:
                 parsed[call_id] = None
-                outputs[call_id] = _json_output(
-                    {"error": "malformed_arguments", "detail": str(error)}
-                )
+                parse_errors[call_id] = {
+                    "error": "malformed_arguments",
+                    "detail": str(error),
+                }
 
-        if not approved_call_ids:
-            for call in calls:
-                call_id = call["call_id"]
-                proposal = parsed.get(call_id)
-                if (
-                    proposal is not None
-                    and self._policy.classify(proposal) is Risk.APPROVAL
-                ):
-                    approval = self._policy.approval_for(proposal)
-                    paused = replace(state, pending_approval=approval)
-                    self._save_paused_state(paused, response_id, calls, outputs)
-                    return RunOutcome(
-                        pending_approval=approval,
-                        run_id=state.run_id,
-                    )
+        for call in calls:
+            call_id = call["call_id"]
+            proposal = parsed.get(call_id)
+            if proposal is None or self._policy.classify(proposal) is not Risk.APPROVAL:
+                continue
+            if (
+                call_id in state.approved_call_digests
+                or call_id in state.rejected_call_reasons
+            ):
+                continue
+            approval = self._policy.approval_for(proposal)
+            paused = replace(state, pending_approval=approval)
+            self._save_paused_state(paused, response_id, calls)
+            return RunOutcome(
+                pending_approval=approval,
+                run_id=state.run_id,
+            )
 
+        outputs: dict[str, str] = {
+            call_id: _json_output(error)
+            for call_id, error in parse_errors.items()
+        }
         for call in calls:
             call_id = call["call_id"]
             if call_id in outputs:
@@ -222,23 +253,30 @@ class OpenAIReActAgent:
                     {"error": "tool_denied", "tool": proposal.tool_name}
                 )
                 continue
-            if risk is Risk.APPROVAL and call_id not in approved_call_ids:
-                approval = self._policy.approval_for(proposal)
-                paused = replace(state, pending_approval=approval)
-                self._save_paused_state(paused, response_id, calls, outputs)
-                return RunOutcome(
-                    pending_approval=approval,
-                    run_id=state.run_id,
+            if call_id in state.rejected_call_reasons:
+                outputs[call_id] = _json_output(
+                    {
+                        "error": "rejected",
+                        "reason": state.rejected_call_reasons[call_id],
+                    }
                 )
+                continue
             if call_id in state.executed_call_ids:
                 outputs[call_id] = _json_output({"error": "duplicate_call_id"})
                 continue
             if risk is Risk.APPROVAL:
+                self._validate_tool_arguments(
+                    proposal.tool_name,
+                    proposal.arguments,
+                )
+                rebound = self._policy.approval_for(proposal)
+                if state.approved_call_digests.get(call_id) != rebound.digest:
+                    raise ValueError("approved proposal digest binding is invalid")
                 state = replace(
                     state,
                     executed_call_ids=state.executed_call_ids | {call_id},
                 )
-                self._save_paused_state(state, response_id, calls, outputs)
+                self._save_paused_state(state, response_id, calls)
             outputs[call_id] = await self._bounded_tool_call(proposal)
             if risk is Risk.READ_ONLY:
                 state = replace(
@@ -301,7 +339,6 @@ class OpenAIReActAgent:
         state: RunState,
         response_id: str,
         calls: list[dict[str, str]],
-        outputs: dict[str, str],
     ) -> None:
         self._checkpoints.save(
             replace(
@@ -309,10 +346,36 @@ class OpenAIReActAgent:
                 response_state={
                     "response_id": response_id,
                     "calls": calls,
-                    "outputs": outputs,
                 },
             )
         )
+
+    def _validate_tool_arguments(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+    ) -> None:
+        matching = [
+            tool
+            for tool in self._tools
+            if tool.get("type") == "function" and tool.get("name") == tool_name
+        ]
+        if len(matching) != 1:
+            raise ValueError(f"no unique function schema for tool {tool_name!r}")
+        tool = matching[0]
+        if tool.get("strict") is not True:
+            raise ValueError(f"function schema for {tool_name!r} is not strict")
+        schema = tool.get("parameters")
+        if not isinstance(schema, Mapping) or schema.get("type") != "object":
+            raise ValueError(f"function schema for {tool_name!r} must be an object")
+        try:
+            Draft202012Validator.check_schema(schema)
+            Draft202012Validator(schema).validate(to_json_value(arguments))
+        except (SchemaError, ValidationError) as error:
+            raise ValueError(
+                f"arguments do not match function schema for {tool_name!r}: "
+                f"{error.message}"
+            ) from error
 
 
 def _value(item: Any, name: str, default: Any = None) -> Any:
@@ -363,15 +426,6 @@ def _stored_calls(response_state: Mapping[str, Any]) -> list[dict[str, str]]:
         }
         for call in calls
     ]
-
-
-def _stored_outputs(response_state: Mapping[str, Any]) -> dict[str, str]:
-    outputs = response_state.get("outputs", {})
-    if not isinstance(outputs, Mapping):
-        raise ValueError("checkpoint outputs must be an object")
-    if not all(isinstance(key, str) and isinstance(value, str) for key, value in outputs.items()):
-        raise ValueError("checkpoint outputs must map strings to strings")
-    return dict(outputs)
 
 
 def _json_output(value: Any) -> str:
