@@ -1,12 +1,12 @@
 # Python + Agent 面试题材料 — 设计文档
 
 > 状态:设计已定稿(融合进 algorithm-notes Astro 站点)
-> 目标:把 Python 基础 + Agent 方向的面试知识,作为一个新「板块」融入现有算法手记站点,与算法章节风格统一。
+> 目标:把 Python 面试知识融入现有算法手记站点,并记录 Agent 内容最终迁移为独立顶层板块的架构决策。
 
 ## 1. 交付形式(已更新:融入 Astro 站点)
 
 - **载体**:融入现有 `algorithm-notes`(Astro 静态站),**不再是独立 HTML**。
-- **顶层双板块**:站点从「算法单一主题」升级为两大板块 —— **算法(Algorithms)** / **Python 知识(Python & Agent)**。
+- **最终顶层三板块**:站点从「算法单一主题」升级为 **算法(Algorithms)** / **Python 知识(Python)** / **Agent** 三个独立板块。
 - **风格统一**:复用现有组件与视觉(`LcBadge`/`Idea`/`Complexity`/`CodeTabs`/`CodeBlock` + 动画/图组件),Shiki 代码高亮,`github-dark-dimmed` 主题。
 - **图**:沿用站点现有的图/动画组件风格;新增流程类图(事件循环、GIL 调度、Agent 流程)用内联 SVG 或 Mermaid(见融合方案 §9)。
 
@@ -26,7 +26,7 @@
 | E | asyncio 深入 | 事件循环、协程调度、async/await 原理、常见坑 |
 | F | FastAPI 工程 | 依赖注入、Pydantic、并发模型(async vs sync 路由)、中间件、流式响应 |
 | G | 网络/HTTP/WebSocket | HTTP 基础、SSE vs WebSocket、流式输出 |
-| H | Agent 基础 | LLM 调用、Tool Calling、RAG、上下文管理、流式、多轮 |
+| H | Agent 基础（已迁移） | 最终不再作为 Python 的 P08；独立 Agent 板块从 A01 ReAct Agent 循环开始 |
 
 ## 4. 每题结构
 
@@ -60,12 +60,12 @@ A 语言基础 → B 数据模型/高级特性 → C 内存/GC → D 并发/GIL 
 
 ## 8. 融合方案:接入 algorithm-notes(已定)
 
-### 8.1 顶层板块建模(Q1 → A)
+### 8.1 顶层板块建模（最终方案）
 
 给 `src/data/topics.ts` 的 `Chapter` 增加一个字段:
 
 ```ts
-export type Category = 'algo' | 'python';
+export type Category = 'algo' | 'python' | 'agent';
 
 export interface Chapter {
   slug: string;
@@ -81,24 +81,26 @@ export interface Chapter {
 
 - 现有 4 个算法章节补 `category: 'algo'`。
 - 新增 Python 章节标 `category: 'python'`,序号独立编号(P01…)。
-- 派生:`algoChapters = chapters.filter(c => c.category==='algo')`、`pythonChapters = ...==='python'`。
+- Agent 章节标 `category: 'agent'`,使用独立编号(A01…)与 `/agent/<slug>` 路由。
+- 派生:`algoChapters`、`pythonChapters`、`agentChapters`,并通过统一分类配置生成路由。
 
 ### 8.2 顶部导航(Q2 → A + 高亮)
 
-`SiteHeader.astro` 增加一级导航入口:**算法** / **Python 面试**,当前板块高亮。
+`SiteHeader.astro` 增加一级导航入口:**算法** / **Python 面试** / **Agent**,当前板块高亮。
 - 算法 → `/`(或 `/#algo`)
 - Python → `/python`(新首页)或首页 Python 区块锚点。
 
 ### 8.3 首页分区
 
-`index.astro` 从单一 `chapters.map` 改为**按板块分组**渲染两个区块:
+`index.astro` 从单一 `chapters.map` 改为**按板块分组**渲染三个区块:
 - 「算法 · Algorithms」区块 → `algoChapters`
-- 「Python & Agent」区块 → `pythonChapters`
+- 「Python · Python」区块 → `pythonChapters`
+- 「Agent · Agent」区块 → `agentChapters`
 - Hero 的统计数字(Chapters 数等)相应更新。
 
 ### 8.4 侧边栏分组
 
-`Sidebar.astro` 的「全部章节」列表按 `category` 分两组标题展示(算法 / Python),当前章节所在组默认展开。
+`Sidebar.astro` 的「全部章节」列表按 `category` 分三组标题展示(算法 / Python / Agent),当前章节所在组默认展开。
 
 ## 9. Python 板块页面形态(Q3 → A,Q4 → C)
 
@@ -118,8 +120,9 @@ export interface Chapter {
 | asyncio | P05 | asyncio 深入 | Asyncio |
 | fastapi | P06 | FastAPI 工程 | FastAPI |
 | network-streaming | P07 | 网络与流式 | Network & Streaming |
-| agent-basics | P08 | Agent 基础 | Agent Basics |
-| hands-on | P09 | 实战手撕 | Hands-on Coding |
+| hands-on | P08 | 实战手撕 | Hands-on Coding |
+
+> 最终架构决策（2026-09-16）：原 `agent-basics/P08` 方案不再采用。Agent 成为与算法、Python 并列的独立顶层板块，首章为 `A01 /agent/react-agent-loop`；Python 的实战手撕顺延为 P08。
 
 ## 10. 目录改动清单
 
@@ -130,10 +133,12 @@ src/
     python-*-code.ts        # 各 Python 章的代码数据(按需)
   pages/
     index.astro            # 改为按板块分组
-    python/                # 新建:Python 板块页面
+    python/                # Python 板块页面
       py-basics.astro
       concurrency-gil.astro
       ...
+    agent/                 # 独立 Agent 板块页面
+      react-agent-loop.astro
   code/
     python/<slug>/*.py     # Python 示例代码
   components/
@@ -145,9 +150,10 @@ src/
 ## 11. 产出顺序(分批,便于评审)
 
 1. **地基**:改 `topics.ts`(category)、`index.astro`(分区)、`SiteHeader`、`Sidebar` —— 先让双板块骨架跑起来(Python 章可先占位 `ready:false`)。
-2. **重点模块优先**:并发/GIL(P04)→ asyncio(P05)→ FastAPI(P06)→ Agent(P08)。
+2. **重点模块优先**:并发/GIL(P04)→ asyncio(P05)→ FastAPI(P06)。
 3. **基础模块**:P01 / P02 / P03 / P07。
-4. **实战手撕**:P09。
+4. **实战手撕**:P08。
+5. **独立 Agent 板块**:从 A01 ReAct Agent 循环开始，后续主题不占用 Python 编号。
 
 ---
 > 设计已定稿。下一步:先做 §11 第 1 步(双板块地基),再逐章产出内容。

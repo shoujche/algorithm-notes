@@ -458,11 +458,11 @@
 - README links every displayed real source file.
 - Historical design reflects the final three-section site architecture.
 
-- [ ] **Step 1: Update documentation**
+- [x] **Step 1: Update documentation**
 
   Add the Agent source directory and file descriptions to README. Update the earlier Python design so it no longer claims Agent is `P08`; keep a note that the final decision moved Agent to an independent section.
 
-- [ ] **Step 2: Run formatting/static diagnostics**
+- [x] **Step 2: Run formatting/static diagnostics**
 
   Run:
 
@@ -480,7 +480,7 @@
   Run:
 
   ```bash
-  docker build -t algorithm-notes-agent-tools src/code/agent/react-agent-loop
+  docker build -f src/code/agent/react-agent-loop/sandbox/Dockerfile -t algorithm-notes-agent-tools src/code/agent/react-agent-loop
   uv run --project src/code/agent/react-agent-loop pytest src/code/agent/react-agent-loop/tests -m docker -q
   ```
 
@@ -498,10 +498,10 @@
   - mobile layout has no horizontal overflow;
   - browser console has no errors.
 
-- [ ] **Step 5: Security review of deliverables**
+- [x] **Step 5: Security review of deliverables**
 
   Search tracked changes for credentials, private keys, certificates, unsafe crypto, `shell=True`, unbounded subprocesses, host-path mounts, `innerHTML` with dynamic values, and MCP HTTP exposure. Record certificates/crypto as not applicable if absent.
 
-- [ ] **Step 6: Final branch status and review gate**
+- [x] **Step 6: Final branch status and review gate**
 
   Confirm the branch is `feature/react-agent-loop`, working tree is clean, tests are recorded, and no push occurred. Present changed files, screenshots, commands/results, security controls, and known limitations. Wait for explicit user approval before push or deployment.
