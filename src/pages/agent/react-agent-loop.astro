@@ -67,7 +67,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
         <AgentLoopAnim />
         <h4 class="sub">数据流 · 一轮里数据怎么走</h4>
         <ol class="flow">
-          <li><span class="s">01</span><span>宿主把<b>用户任务 + 工具 schema</b>发给模型（Skill 只给名称和描述）</span></li>
+          <li><span class="s">01</span><span>宿主把<b>用户任务 + 工具 schema</b>发给模型（<b>不含任何 Skill 内容</b>，Skill 要模型自己调工具去问）</span></li>
           <li><span class="s">02</span><span>模型返回若干输出项；其中 <kbd>function_call</kbd> 项被转成 <b>ToolProposal</b></span></li>
           <li><span class="s">03</span><span>确定性策略给每个提议打上 <b>read_only / approval / deny</b></span></li>
           <li><span class="s">04</span><span>只读的直接执行，敏感的<b>存档并停下</b>等人批准</span></li>
@@ -142,35 +142,36 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
         <h3>SKILL.md 与渐进式披露</h3>
         <p class="lead"><b>问题</b>：你想教模型「改文件前先读、改完要验证」这类工作习惯。全塞进 system prompt 会把上下文撑爆，而且每加一条规则所有请求都要为它付费。怎么按需加载？</p>
         <Idea>
-          文件式 Skill 的核心是 <b>progressive disclosure（渐进式披露）</b>：把能力拆成三层，模型需要哪层才加载哪层。
+          文件式 Skill 的核心是 <b>progressive disclosure（渐进式披露）</b>：把能力拆成三层，模型需要哪层才去取哪层。注意这里没有任何「宿主替你注入」的环节——<b>三层全都是模型主动调工具换来的</b>，初始请求里一个字的 Skill 都没有。
           <ol class="steps">
-            <li><b>目录层（常驻）</b>：<kbd>list_skills</kbd> 只返回 name 和 description，几十个字，永远在上下文里。</li>
-            <li><b>正文层（按需）</b>：模型判断要用某个 Skill，才调 <kbd>read_skill</kbd> 把 SKILL.md 正文当作 Observation 取回。</li>
+            <li><b>目录层（一次工具调用）</b>：模型主动调 <kbd>list_skills</kbd>，才拿到每个 Skill 的 name 和 description。不调就完全不知道有 Skill 存在。</li>
+            <li><b>正文层（按需）</b>：模型从描述里判断要用某个 Skill，才调 <kbd>read_skill</kbd> 把 SKILL.md 正文当作 Observation 取回。</li>
             <li><b>资料层（再按需）</b>：Skill 里提到的具体文件，由普通文件工具去读。</li>
           </ol>
+          代价也要说清楚：目录不常驻意味着<b>每次新对话都要先花一次只读工具调用</b>去问。换来的是初始上下文恒定，Skill 加到几十个也不会撑爆请求。
           两条硬约束：Skill 目录<b>只读挂载</b>，Agent 不能改写自己的规则；Skill 正文是<b>不可信数据</b>，它可以建议做法，但不能提升任何工具权限，也不能覆盖确定性策略。
         </Idea>
-        <h4 class="sub">数据流 · Skill 从磁盘到上下文</h4>
+        <h4 class="sub">数据流 · Skill 什么时候才进上下文</h4>
         <ol class="flow">
-          <li><span class="s">01</span><span>容器启动时扫描<b>只读挂载</b>的 /skills，逐个校验目录结构</span></li>
-          <li><span class="s">02</span><span>列目录时<b>只读 YAML frontmatter</b>（上限 8 KiB），拿到 name 与 description</span></li>
-          <li><span class="s">03</span><span>宿主把这份摘要交给模型，<b>正文一个字都不进初始上下文</b></span></li>
-          <li><span class="s">04</span><span>模型调 <kbd>read_skill</kbd>，正文以 Observation 形式返回，<b>受最大字节数限制</b></span></li>
-          <li><span class="s">05</span><span>宿主侧的 skills 模块<b>只校验 MCP 返回的元数据</b>，不自己读宿主文件系统</span></li>
+          <li><span class="s">01</span><span>容器里的 MCP Server 启动时<b>只校验 /skills 根目录</b>本身（非软链、确实是目录），<b>不读任何 SKILL.md</b></span></li>
+          <li><span class="s">02</span><span>模型此时<b>看不到任何 Skill</b>：初始上下文只有用户消息和六个工具的 schema</span></li>
+          <li><span class="s">03</span><span>模型<b>主动调 <kbd>list_skills</kbd></b>（只读、自动执行），每次调用<b>才</b>重新逐项扫描目录并<b>只读 8 KiB frontmatter</b>，这时才拿到 name 与 description</span></li>
+          <li><span class="s">04</span><span>目录摘要作为 <b>Observation</b> 回到模型；正文一个字都还没读</span></li>
+          <li><span class="s">05</span><span>模型再调 <kbd>read_skill</kbd>，<b>又扫一遍</b>目录定位文件，正文受最大字节数限制返回</span></li>
         </ol>
         <h4 class="sub">真实代码 · 示例 Skill 与目录扫描</h4>
         <p>这份 SKILL.md 就是容器里被挂载的那一份。注意最后两行：它主动声明自己不能提权、工具输出是不可信数据——规则文件自己也要讲清楚自己的地位。</p>
         <CodeBlock code={skillDoc} lang="markdown" file="skills/workspace-helper/SKILL.md" src={src('skills/workspace-helper/SKILL.md')} />
-        <p>扫描逻辑里连续三次拒绝软链接：根目录、子目录项、SKILL.md 本身。最后 <kbd>_resolve_beneath</kbd> 再确认解析后的真实路径仍在可信根之内。</p>
+        <p>这段 <kbd>skills.py</kbd> 跑在容器里（MCP Server 的根目录写死成 <kbd>/workspace</kbd> 与 <kbd>/skills</kbd>），宿主不碰它。关键在于 <kbd>_discover_skills</kbd> 是被 <kbd>list_skills()</kbd> 和 <kbd>read_skill()</kbd> <b>各自调用</b>的——不是启动时扫一次存起来，而是<b>每次工具调用都重扫一遍</b>。这样做慢一点，但 Skill 目录在 run 中途被换掉时不会拿着过期缓存继续跑。扫描里连续三次拒绝软链接：根目录、子目录项、SKILL.md 本身；最后 <kbd>_resolve_beneath</kbd> 再确认解析后的真实路径仍在可信根之内。</p>
         <CodeBlock code={skillDiscovery} lang="python" file="agent_core/skills.py" src={src('agent_core/skills.py')} />
         <h4 class="sub">故障点</h4>
         <ul class="fail">
           <li><b>把全部 SKILL.md 拼进 system prompt</b>：上下文爆炸，且规则越多模型越容易忽略其中几条。</li>
-          <li><b>宿主自己去读 Skill 文件</b>：等于在 MCP 与沙盒之外开了第二条读取路径，安全评审时两条路都得再审一遍。</li>
+          <li><b>宿主自己去读 Skill 文件再塞进请求</b>：等于在 MCP 与沙盒之外开了第二条读取路径，安全评审时两条路都得再审一遍。本章的 Skill 只能由模型调工具、经容器读出来。</li>
           <li><b>Skill 目录可写</b>：模型可以改写自己的行为准则，审计就失去意义。</li>
           <li><b>把 Skill 正文当指令执行</b>：它是数据。里面写「忽略之前的限制」也必须无效。</li>
         </ul>
-        <p class="cue"><span class="t">记忆提示</span>目录常驻、正文按需、资料再按需；Skill 只读，且永远不能提权。</p>
+        <p class="cue"><span class="t">记忆提示</span>目录要自己调一次 <kbd>list_skills</kbd> 去问，正文按需、资料再按需；每次调用都重扫，Skill 只读，且永远不能提权。</p>
         <Interview q="Skill、system prompt、RAG 三者怎么分工?">
           <p><b>system prompt</b> 放不随任务变化的身份与硬约束，永远常驻，所以要短。<b>Skill</b> 放「某类任务的工作流程」，靠名称和描述做索引、按需展开，本质是<b>可寻址的提示词</b>。<b>RAG</b> 放事实性知识，靠向量或关键词检索片段。判断标准很简单：教「怎么做」用 Skill，提供「是什么」用 RAG，定义「你是谁、绝对不能做什么」用 system prompt。</p>
         </Interview>
@@ -481,7 +482,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
         <ol class="flow">
           <li><span class="s">01</span><span>Agent = <b>带记忆的 while 循环</b>：模型提议，宿主执行，结果回喂。</span></li>
           <li><span class="s">02</span><span>三个出口：<b>给答案、没预算、要审批</b>。</span></li>
-          <li><span class="s">03</span><span>Skill <b>目录常驻、正文按需</b>，只读且不能提权。</span></li>
+          <li><span class="s">03</span><span>Skill <b>目录要自己调 list_skills 去问、正文再按需</b>，只读且不能提权。</span></li>
           <li><span class="s">04</span><span>MCP 的 <b>schema 是契约，annotations 只是提示</b>，授权在宿主。</span></li>
           <li><span class="s">05</span><span>安全是两层：<b>先校验输入，再靠容器兜底</b>。</span></li>
           <li><span class="s">06</span><span>回填靠 <b>call_id</b>，不靠顺序。</span></li>
