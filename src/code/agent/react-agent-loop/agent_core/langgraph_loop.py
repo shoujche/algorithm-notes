@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
@@ -35,6 +36,7 @@ class GraphState(TypedDict, total=False):
     model_calls: int
     tool_calls: int
     usage_units: int
+    remaining_timeout_seconds: float
     final_text: str
     halt: bool
 
@@ -57,6 +59,7 @@ class LangGraphReActAgent:
         max_model_retries: int = 2,
         retry_initial_delay: float = 0.25,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        monotonic: Callable[[], float] = time.monotonic,
         run_id_factory: Callable[[], str] | None = None,
     ) -> None:
         if min(
@@ -84,6 +87,7 @@ class LangGraphReActAgent:
         self._max_model_retries = max_model_retries
         self._retry_initial_delay = retry_initial_delay
         self._sleep = sleep
+        self._monotonic = monotonic
         self._run_id_factory = run_id_factory or (lambda: uuid.uuid4().hex)
         self._definitions: dict[str, dict[str, Any]] = {}
         self._bound_model: Any = None
@@ -104,15 +108,16 @@ class LangGraphReActAgent:
 
     async def start(self, user_input: str) -> RunOutcome:
         run_id = self._run_id_factory()
-        try:
-            async with asyncio.timeout(self._timeout_seconds):
-                graph = await self.build_graph()
-                result = await graph.ainvoke(
-                    {"messages": [{"role": "user", "content": user_input}]},
-                    _config(run_id),
-                )
-        except TimeoutError as error:
-            raise BudgetExceeded("total timeout budget exceeded") from error
+        graph = await self.build_graph()
+        result = await self._invoke_with_timeout_budget(
+            graph,
+            run_id,
+            {
+                "messages": [{"role": "user", "content": user_input}],
+                "remaining_timeout_seconds": self._timeout_seconds,
+            },
+            self._timeout_seconds,
+        )
         return _to_outcome(result, run_id, self._policy)
 
     async def resume(
@@ -121,38 +126,80 @@ class LangGraphReActAgent:
         decision: ResumeDecision,
     ) -> RunOutcome:
         with self._claims.claim(run_id):
-            try:
-                async with asyncio.timeout(self._timeout_seconds):
-                    graph = await self.build_graph()
-                    pending = await self._pending_from_graph(graph, run_id)
-                    if pending is None:
-                        raise ValueError("run has no pending approval")
-                    _validate_resume_decision(decision, pending)
-                    if decision.arguments is not None:
-                        self._validate_arguments(
-                            pending.proposal.tool_name,
-                            decision.arguments,
-                        )
-                        edited = ToolProposal(
-                            pending.proposal.call_id,
-                            pending.proposal.tool_name,
-                            decision.arguments,
-                        )
-                        if self._policy.classify(edited) is not Risk.APPROVAL:
-                            raise ValueError("edited proposal is not approvable")
-                    result = await graph.ainvoke(
-                        Command(resume=_decision_to_dict(decision)),
-                        _config(run_id),
-                    )
-            except TimeoutError as error:
-                raise BudgetExceeded(
-                    "total timeout budget exceeded"
-                ) from error
+            graph = await self.build_graph()
+            snapshot = await graph.aget_state(_config(run_id))
+            remaining = _remaining_timeout(snapshot)
+            if remaining <= 0:
+                raise BudgetExceeded("total timeout budget exceeded")
+            pending = _pending_from_snapshot(snapshot, self._policy)
+            if pending is None:
+                raise ValueError("run has no pending approval")
+            _validate_resume_decision(decision, pending)
+            if decision.arguments is not None:
+                self._validate_arguments(
+                    pending.proposal.tool_name,
+                    decision.arguments,
+                )
+                edited = ToolProposal(
+                    pending.proposal.call_id,
+                    pending.proposal.tool_name,
+                    decision.arguments,
+                )
+                if self._policy.classify(edited) is not Risk.APPROVAL:
+                    raise ValueError("edited proposal is not approvable")
+            result = await self._invoke_with_timeout_budget(
+                graph,
+                run_id,
+                Command(resume=_decision_to_dict(decision)),
+                remaining,
+            )
             return _to_outcome(result, run_id, self._policy)
 
     async def pending_approval(self, run_id: str) -> ApprovalRequest | None:
         graph = await self.build_graph()
         return await self._pending_from_graph(graph, run_id)
+
+    async def _invoke_with_timeout_budget(
+        self,
+        graph: Any,
+        run_id: str,
+        graph_input: Any,
+        remaining: float,
+    ) -> Mapping[str, Any]:
+        if remaining <= 0:
+            raise BudgetExceeded("total timeout budget exceeded")
+        started = self._monotonic()
+        result: Mapping[str, Any] | None = None
+        failure: Exception | None = None
+        timed_out = False
+        try:
+            async with asyncio.timeout(remaining):
+                result = await graph.ainvoke(
+                    graph_input,
+                    _config(run_id),
+                )
+        except TimeoutError as error:
+            timed_out = True
+            failure = BudgetExceeded("total timeout budget exceeded")
+            failure.__cause__ = error
+        except Exception as error:
+            failure = error
+
+        elapsed = max(0.0, self._monotonic() - started)
+        updated_remaining = (
+            0.0 if timed_out else max(0.0, remaining - elapsed)
+        )
+        await graph.aupdate_state(
+            _config(run_id),
+            {"remaining_timeout_seconds": updated_remaining},
+        )
+        if failure is not None:
+            raise failure
+        if updated_remaining <= 0:
+            raise BudgetExceeded("total timeout budget exceeded")
+        if result is None:
+            raise RuntimeError("graph invocation produced no result")
+        return result
 
     async def build_graph(self) -> Any:
         definitions = validate_function_tools(
@@ -597,9 +644,12 @@ class LangGraphReActAgent:
                 )
             try:
                 result = await self._mcp.call(name, dict(arguments))
-                is_error, parsed_result, truncated = self._parse_mcp_result(
-                    result
-                )
+                (
+                    is_error,
+                    parsed_result,
+                    truncated,
+                    marker_too_large,
+                ) = self._parse_mcp_result(result)
             except Exception as error:
                 self._side_effects.finish(run_id, call_id, "failed")
                 return _observation(
@@ -640,6 +690,8 @@ class LangGraphReActAgent:
                         },
                         error=True,
                     )
+                if marker_too_large:
+                    raise BudgetExceeded("tool output budget exceeded")
                 return _observation(
                     call_id,
                     name,
@@ -701,13 +753,22 @@ class LangGraphReActAgent:
 
         try:
             result = await self._mcp.call(name, dict(arguments))
-            is_error, parsed_result, truncated = self._parse_mcp_result(result)
+            (
+                is_error,
+                parsed_result,
+                truncated,
+                marker_too_large,
+            ) = self._parse_mcp_result(result)
+            if marker_too_large:
+                raise BudgetExceeded("tool output budget exceeded")
             return _observation(
                 call_id,
                 name,
                 parsed_result,
                 error=is_error or truncated,
             )
+        except BudgetExceeded:
+            raise
         except Exception as error:
             return _observation(
                 call_id,
@@ -735,17 +796,30 @@ class LangGraphReActAgent:
     async def _finish(self, state: GraphState) -> dict[str, Any]:
         return {}
 
-    def _parse_mcp_result(self, result: Any) -> tuple[bool, Any, bool]:
+    def _parse_mcp_result(
+        self,
+        result: Any,
+    ) -> tuple[bool, Any, bool, bool]:
         is_error, payload = _parse_mcp_result(result)
         if len(result) <= self._max_output_chars:
-            return is_error, payload, False
+            return is_error, payload, False, False
+        marker = {
+            "error": "tool_output_truncated",
+            "status": "error" if is_error else "success",
+            "truncated": True,
+        }
+        rendered = json.dumps(
+            marker,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
         return (
             is_error,
-            {
-                "error": "tool_output_truncated",
-                "truncated": True,
-            },
+            marker,
             True,
+            len(rendered) > self._max_output_chars,
         )
 
     def _validate_arguments(
@@ -771,14 +845,37 @@ class LangGraphReActAgent:
         run_id: str,
     ) -> ApprovalRequest | None:
         snapshot = await graph.aget_state(_config(run_id))
-        interrupts = getattr(snapshot, "interrupts", ())
-        if not interrupts:
-            return None
-        return _approval_from_interrupt(interrupts[0], self._policy)
+        return _pending_from_snapshot(snapshot, self._policy)
 
 
 def _config(run_id: str) -> dict[str, dict[str, str]]:
     return {"configurable": {"thread_id": run_id}}
+
+
+def _remaining_timeout(snapshot: Any) -> float:
+    values = getattr(snapshot, "values", {})
+    remaining = values.get("remaining_timeout_seconds")
+    if type(remaining) not in {int, float} or remaining < 0:
+        raise ValueError("checkpoint has no valid remaining timeout budget")
+    return float(remaining)
+
+
+def _pending_from_snapshot(
+    snapshot: Any,
+    policy: ToolPolicy,
+) -> ApprovalRequest | None:
+    interrupts = getattr(snapshot, "interrupts", ())
+    if interrupts:
+        return _approval_from_interrupt(interrupts[0], policy)
+    values = getattr(snapshot, "values", {})
+    for call in values.get("calls", []):
+        if (
+            isinstance(call, Mapping)
+            and call.get("risk") == Risk.APPROVAL.value
+            and call.get("approval_status") == "pending"
+        ):
+            return policy.approval_for(_proposal_from_call(call))
+    return None
 
 
 def _route_after_response(state: GraphState) -> str:

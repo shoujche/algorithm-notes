@@ -111,6 +111,25 @@ class LargeOutputMCP(GraphMCP):
         )
 
 
+class LargeErrorOutputMCP(GraphMCP):
+    async def call(self, name: str, arguments: dict[str, Any]) -> str:
+        self.calls.append((name, arguments))
+        return json.dumps(
+            {
+                "is_error": True,
+                "content": {"message": "x" * 200},
+            }
+        )
+
+
+class ScriptedMonotonic:
+    def __init__(self, values: list[float]) -> None:
+        self._values = deque(values)
+
+    def __call__(self) -> float:
+        return self._values.popleft()
+
+
 class SlowChatModel(FakeChatModel):
     def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
         time.sleep(0.05)
@@ -276,7 +295,10 @@ async def test_stable_thread_resumes_with_command_not_plain_input(
         ),
     )
 
-    assert calls[0][0] == {"messages": [{"role": "user", "content": "change"}]}
+    assert calls[0][0] == {
+        "messages": [{"role": "user", "content": "change"}],
+        "remaining_timeout_seconds": 120,
+    }
     assert isinstance(calls[1][0], Command)
     assert calls[0][1]["configurable"]["thread_id"] == "run-1"
     assert calls[1][1]["configurable"]["thread_id"] == "run-1"
@@ -722,10 +744,90 @@ async def test_total_timeout_uses_shared_budget_exception(tmp_path) -> None:
         mcp=GraphMCP(),
         checkpoint_path=tmp_path / "timeout.json",
         timeout_seconds=0.001,
+        run_id_factory=lambda: "run-timeout",
     )
 
     with pytest.raises(BudgetExceeded, match="total timeout"):
         await agent.start("inspect")
+    graph = await agent.build_graph()
+    snapshot = await graph.aget_state(
+        {"configurable": {"thread_id": "run-timeout"}}
+    )
+    assert snapshot.values["remaining_timeout_seconds"] == 0
+
+
+@pytest.mark.asyncio
+async def test_timeout_budget_accumulates_across_resumes_without_human_wait(
+    tmp_path,
+) -> None:
+    clock = ScriptedMonotonic(
+        [
+            0.0,
+            2.0,
+            10_000.0,
+            10_003.0,
+            20_000.0,
+            20_006.0,
+        ]
+    )
+    agent, _, mcp = make_agent(
+        tmp_path,
+        [
+            ai_with_calls(
+                tool_call(
+                    "call-first",
+                    "write_file",
+                    {"path": "a.py", "content": "a"},
+                ),
+                tool_call(
+                    "call-second",
+                    "write_file",
+                    {"path": "b.py", "content": "b"},
+                ),
+                tool_call(
+                    "call-third",
+                    "write_file",
+                    {"path": "c.py", "content": "c"},
+                ),
+            )
+        ],
+        timeout_seconds=10,
+        monotonic=clock,
+    )
+
+    first = await agent.start("change three")
+    second = await agent.resume(
+        "run-1",
+        ResumeDecision(
+            action="approve",
+            digest=first.pending_approval.digest,
+        ),
+    )
+    with pytest.raises(BudgetExceeded, match="total timeout"):
+        await agent.resume(
+            "run-1",
+            ResumeDecision(
+                action="approve",
+                digest=second.pending_approval.digest,
+            ),
+        )
+
+    graph = await agent.build_graph()
+    snapshot = await graph.aget_state(
+        {"configurable": {"thread_id": "run-1"}}
+    )
+    assert snapshot.values["remaining_timeout_seconds"] == 0
+    assert mcp.calls == []
+    pending = await agent.pending_approval("run-1")
+    assert pending is not None
+    with pytest.raises(BudgetExceeded, match="total timeout"):
+        await agent.resume(
+            "run-1",
+            ResumeDecision(
+                action="approve",
+                digest=pending.digest,
+            ),
+        )
 
 
 @pytest.mark.asyncio
@@ -786,11 +888,18 @@ async def test_exhausted_model_retries_raise_documented_error(tmp_path) -> None:
         [RuntimeError("temporary"), RuntimeError("still unavailable")],
         max_model_retries=1,
         sleep=no_sleep,
+        timeout_seconds=10,
+        monotonic=ScriptedMonotonic([0.0, 2.0]),
     )
 
     with pytest.raises(ResponsesRetryError, match="2 attempts"):
         await agent.start("inspect")
     assert len(model.seen_messages) == 2
+    graph = await agent.build_graph()
+    snapshot = await graph.aget_state(
+        {"configurable": {"thread_id": "run-1"}}
+    )
+    assert snapshot.values["remaining_timeout_seconds"] == 8
 
 
 @pytest.mark.asyncio
@@ -811,6 +920,7 @@ async def test_tool_output_is_bounded_and_marked_truncated(tmp_path) -> None:
     assert len(str(model.seen_messages[-1][-1].content)) <= 80
     truncated = json.loads(str(model.seen_messages[-1][-1].content))
     assert truncated["error"] == "tool_output_truncated"
+    assert truncated["status"] == "success"
     assert truncated["truncated"] is True
     assert mcp.calls == [("read_file", {"path": "a.py"})]
 
@@ -849,7 +959,108 @@ async def test_sensitive_output_truncation_keeps_executed_ledger_status(
     assert agent.side_effect_ledger.status("run-1", "call-write") == "executed"
     truncated = json.loads(str(model.seen_messages[-1][-1].content))
     assert truncated["error"] == "tool_output_truncated"
+    assert truncated["status"] == "success"
     assert truncated["truncated"] is True
+    assert mcp.calls == [
+        ("write_file", {"path": "b.py", "content": "new"})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_error_output_truncation_preserves_error_status(tmp_path) -> None:
+    agent, model, mcp = make_agent(
+        tmp_path,
+        [
+            ai_with_calls(tool_call("call-read", "read_file", {"path": "a.py"})),
+            AIMessage(content="reported error"),
+        ],
+        mcp=LargeErrorOutputMCP(),
+        max_output_chars=80,
+    )
+
+    outcome = await agent.start("inspect")
+
+    assert outcome.final_text == "reported error"
+    rendered = str(model.seen_messages[-1][-1].content)
+    assert len(rendered) <= 80
+    truncated = json.loads(rendered)
+    assert truncated == {
+        "error": "tool_output_truncated",
+        "status": "error",
+        "truncated": True,
+    }
+    assert model.seen_messages[-1][-1].status == "error"
+    assert mcp.calls == [("read_file", {"path": "a.py"})]
+
+
+@pytest.mark.asyncio
+async def test_sensitive_error_truncation_finishes_failed(tmp_path) -> None:
+    mcp = LargeErrorOutputMCP()
+    agent, model, _ = make_agent(
+        tmp_path,
+        [
+            ai_with_calls(
+                tool_call(
+                    "call-write",
+                    "write_file",
+                    {"path": "b.py", "content": "new"},
+                )
+            ),
+            AIMessage(content="reported error"),
+        ],
+        mcp=mcp,
+        max_output_chars=80,
+    )
+    pending = await agent.start("change")
+
+    outcome = await agent.resume(
+        "run-1",
+        ResumeDecision(
+            action="approve",
+            digest=pending.pending_approval.digest,
+        ),
+    )
+
+    assert outcome.final_text == "reported error"
+    assert agent.side_effect_ledger.status("run-1", "call-write") == "failed"
+    truncated = json.loads(str(model.seen_messages[-1][-1].content))
+    assert truncated["status"] == "error"
+    assert mcp.calls == [
+        ("write_file", {"path": "b.py", "content": "new"})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tiny_output_budget_terminates_without_oversized_observation(
+    tmp_path,
+) -> None:
+    mcp = LargeOutputMCP()
+    agent, _, _ = make_agent(
+        tmp_path,
+        [
+            ai_with_calls(
+                tool_call(
+                    "call-write",
+                    "write_file",
+                    {"path": "b.py", "content": "new"},
+                )
+            )
+        ],
+        mcp=mcp,
+        max_output_chars=20,
+    )
+    pending = await agent.start("change")
+
+    with pytest.raises(BudgetExceeded, match="tool output budget"):
+        await agent.resume(
+            "run-1",
+            ResumeDecision(
+                action="approve",
+                digest=pending.pending_approval.digest,
+            ),
+        )
+
+    assert agent.side_effect_ledger.status("run-1", "call-write") == "executed"
     assert mcp.calls == [
         ("write_file", {"path": "b.py", "content": "new"})
     ]
