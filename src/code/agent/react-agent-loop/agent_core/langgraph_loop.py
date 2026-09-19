@@ -39,13 +39,17 @@ class GraphState(TypedDict, total=False):
     model_calls: int
     tool_calls: int
     usage_units: int
-    remaining_timeout_seconds: float
     final_text: str
     halt: bool
 
 
 class ActiveBudgetStore:
-    """Permission-restricted sidecar for budget updates before a graph exists."""
+    """The single authoritative store of each run's active timeout budget.
+
+    The budget deliberately lives outside the graph checkpoint: a second copy
+    in `GraphState` would diverge silently whenever one of the two writes is
+    skipped, and nodes must never decide budgets from replayed state.
+    """
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -154,19 +158,19 @@ class LangGraphReActAgent:
     def side_effect_ledger(self) -> SideEffectLedger:
         return self._side_effects
 
+    def remaining_timeout_seconds(self, run_id: str) -> float | None:
+        """Read the authoritative remaining active timeout for a run."""
+        return self._budgets.load(run_id)
+
     async def start(self, user_input: str) -> RunOutcome:
         started = self._monotonic()
         run_id = self._run_id_factory()
         self._budgets.initialize(run_id, self._timeout_seconds)
-        graph_ref: list[Any | None] = [None]
 
         async def invoke() -> Mapping[str, Any]:
-            graph_ref[0] = await self.build_graph()
-            return await graph_ref[0].ainvoke(
-                {
-                    "messages": [{"role": "user", "content": user_input}],
-                    "remaining_timeout_seconds": self._timeout_seconds,
-                },
+            graph = await self.build_graph()
+            return await graph.ainvoke(
+                {"messages": [{"role": "user", "content": user_input}]},
                 _config(run_id),
             )
 
@@ -175,7 +179,6 @@ class LangGraphReActAgent:
             self._timeout_seconds,
             started,
             invoke,
-            graph_ref,
         )
         return _to_outcome(result, run_id, self._policy)
 
@@ -191,11 +194,10 @@ class LangGraphReActAgent:
                 raise ValueError("run has no persisted timeout budget")
             if remaining <= 0:
                 raise BudgetExceeded("total timeout budget exceeded")
-            graph_ref: list[Any | None] = [None]
 
             async def invoke() -> Mapping[str, Any]:
-                graph_ref[0] = await self.build_graph()
-                snapshot = await graph_ref[0].aget_state(_config(run_id))
+                graph = await self.build_graph()
+                snapshot = await graph.aget_state(_config(run_id))
                 pending = _pending_from_snapshot(snapshot, self._policy)
                 if pending is None:
                     raise ValueError("run has no pending approval")
@@ -212,7 +214,7 @@ class LangGraphReActAgent:
                     )
                     if self._policy.classify(edited) is not Risk.APPROVAL:
                         raise ValueError("edited proposal is not approvable")
-                return await graph_ref[0].ainvoke(
+                return await graph.ainvoke(
                     Command(resume=_decision_to_dict(decision)),
                     _config(run_id),
                 )
@@ -222,7 +224,6 @@ class LangGraphReActAgent:
                 remaining,
                 started,
                 invoke,
-                graph_ref,
             )
             return _to_outcome(result, run_id, self._policy)
 
@@ -236,14 +237,13 @@ class LangGraphReActAgent:
         remaining: float,
         started: float,
         operation: Callable[[], Awaitable[Mapping[str, Any]]],
-        graph_ref: list[Any | None],
     ) -> Mapping[str, Any]:
         if remaining <= 0:
             raise BudgetExceeded("total timeout budget exceeded")
         elapsed_before_async = max(0.0, self._monotonic() - started)
         available = max(0.0, remaining - elapsed_before_async)
         if available <= 0:
-            await self._persist_active_budget(run_id, 0.0, graph_ref[0])
+            await self._persist_active_budget(run_id, 0.0)
             raise BudgetExceeded("total timeout budget exceeded")
         result: Mapping[str, Any] | None = None
         failure: BaseException | None = None
@@ -258,15 +258,29 @@ class LangGraphReActAgent:
         except BaseException as error:
             failure = error
 
+        # The measured interval stops here. Charging the run for the write
+        # that records the measurement could never terminate, so the budget
+        # bookkeeping itself is the one excluded step; it is never retried
+        # or back-filled.
         elapsed = max(0.0, self._monotonic() - started)
         updated_remaining = (
             0.0 if timed_out else max(0.0, remaining - elapsed)
         )
-        await self._persist_active_budget(
-            run_id,
-            updated_remaining,
-            graph_ref[0],
-        )
+        cancelled: asyncio.CancelledError | None = None
+        try:
+            await self._persist_active_budget(run_id, updated_remaining)
+        except asyncio.CancelledError as error:
+            cancelled = error
+        except BaseException as error:
+            if failure is not None:
+                raise error from failure
+            raise
+        if cancelled is not None:
+            # The budget is safely on disk, so the external cancellation is
+            # reported unchanged instead of a successful outcome.
+            if failure is not None:
+                raise cancelled from failure
+            raise cancelled
         if failure is not None:
             raise failure
         if updated_remaining <= 0:
@@ -279,28 +293,23 @@ class LangGraphReActAgent:
         self,
         run_id: str,
         remaining: float,
-        graph: Any | None,
     ) -> None:
-        self._budgets.save(run_id, remaining)
-        if graph is None:
-            return
+        async def save() -> None:
+            self._budgets.save(run_id, remaining)
 
-        async def update_graph() -> None:
+        task = asyncio.create_task(save())
+        cancelled: asyncio.CancelledError | None = None
+        while not task.done():
             try:
-                await graph.aupdate_state(
-                    _config(run_id),
-                    {"remaining_timeout_seconds": remaining},
-                )
-            except BaseException:
-                # The durable sidecar is authoritative when graph checkpoint
-                # update cannot complete (including repeated cancellation).
-                return
-
-        task = asyncio.create_task(update_graph())
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            await task
+                await asyncio.shield(task)
+            except asyncio.CancelledError as error:
+                # Cancelling mid-write would lose the budget, so the write is
+                # shielded to completion and the cancellation is kept.
+                if cancelled is None:
+                    cancelled = error
+        task.result()
+        if cancelled is not None:
+            raise cancelled
 
     async def build_graph(self) -> Any:
         definitions = validate_function_tools(

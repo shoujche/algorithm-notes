@@ -17,6 +17,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.types import Command
 from pydantic import PrivateAttr
 
+from agent_core.checkpoints import RunClaimedError
 from agent_core.contracts import to_json_value
 from agent_core.langgraph_loop import LangGraphReActAgent
 from agent_core.openai_loop import BudgetExceeded, ResponsesRetryError, ResumeDecision
@@ -164,10 +165,46 @@ class ClockingBuildMCP(GraphMCP):
         return await super().list_function_tools()
 
 
+class YieldingBuildMCP(GraphMCP):
+    def __init__(self, clock: MutableMonotonic) -> None:
+        super().__init__()
+        self.clock = clock
+
+    async def list_function_tools(self) -> list[dict[str, Any]]:
+        await asyncio.sleep(0)
+        self.clock.advance(1)
+        return await super().list_function_tools()
+
+
 class SlowBuildMCP(GraphMCP):
     async def list_function_tools(self) -> list[dict[str, Any]]:
         await asyncio.sleep(0.05)
         return await super().list_function_tools()
+
+
+class InterferingBudgetStore:
+    """Scripts interference with the persistence-stage budget write."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self.cancel_target: Any = None
+        self.fail_on_save = False
+        self.saved: list[float] = []
+
+    def initialize(self, run_id: str, remaining: float) -> None:
+        self._inner.initialize(run_id, remaining)
+
+    def load(self, run_id: str) -> float | None:
+        return self._inner.load(run_id)
+
+    def save(self, run_id: str, remaining: float) -> None:
+        target, self.cancel_target = self.cancel_target, None
+        if target is not None:
+            target.cancel()
+        if self.fail_on_save:
+            raise OSError("budget sidecar unavailable")
+        self._inner.save(run_id, remaining)
+        self.saved.append(remaining)
 
 
 class ClockingClaims:
@@ -347,7 +384,6 @@ async def test_stable_thread_resumes_with_command_not_plain_input(
 
     assert calls[0][0] == {
         "messages": [{"role": "user", "content": "change"}],
-        "remaining_timeout_seconds": 120,
     }
     assert isinstance(calls[1][0], Command)
     assert calls[0][1]["configurable"]["thread_id"] == "run-1"
@@ -799,11 +835,7 @@ async def test_total_timeout_uses_shared_budget_exception(tmp_path) -> None:
 
     with pytest.raises(BudgetExceeded, match="total timeout"):
         await agent.start("inspect")
-    graph = await agent.build_graph()
-    snapshot = await graph.aget_state(
-        {"configurable": {"thread_id": "run-timeout"}}
-    )
-    assert snapshot.values["remaining_timeout_seconds"] == 0
+    assert agent.remaining_timeout_seconds("run-timeout") == 0
 
 
 @pytest.mark.asyncio
@@ -866,11 +898,7 @@ async def test_timeout_budget_accumulates_across_resumes_without_human_wait(
             ),
         )
 
-    graph = await agent.build_graph()
-    snapshot = await graph.aget_state(
-        {"configurable": {"thread_id": "run-1"}}
-    )
-    assert snapshot.values["remaining_timeout_seconds"] == 0
+    assert agent.remaining_timeout_seconds("run-1") == 0
     assert mcp.calls == []
     pending = await agent.pending_approval("run-1")
     assert pending is not None
@@ -900,11 +928,7 @@ async def test_build_graph_active_time_is_charged_to_run_budget(tmp_path) -> Non
     outcome = await agent.start("inspect")
 
     assert outcome.final_text == "done"
-    graph = await agent.build_graph()
-    snapshot = await graph.aget_state(
-        {"configurable": {"thread_id": "run-build"}}
-    )
-    assert snapshot.values["remaining_timeout_seconds"] == 6
+    assert agent.remaining_timeout_seconds("run-build") == 6
 
 
 @pytest.mark.asyncio
@@ -969,10 +993,7 @@ async def test_resume_checkpoint_load_time_is_charged(
     )
 
     assert outcome.final_text == "saved"
-    snapshot = await real_get_state(
-        {"configurable": {"thread_id": "run-1"}}
-    )
-    assert snapshot.values["remaining_timeout_seconds"] == 6
+    assert agent.remaining_timeout_seconds("run-1") == 6
 
 
 @pytest.mark.asyncio
@@ -1005,11 +1026,7 @@ async def test_resume_timer_starts_before_synchronous_claim(tmp_path) -> None:
     )
 
     assert outcome.final_text == "saved"
-    graph = await agent.build_graph()
-    snapshot = await graph.aget_state(
-        {"configurable": {"thread_id": "run-1"}}
-    )
-    assert snapshot.values["remaining_timeout_seconds"] == 8
+    assert agent.remaining_timeout_seconds("run-1") == 8
 
 
 @pytest.mark.asyncio
@@ -1050,14 +1067,117 @@ async def test_cancelled_resume_persists_elapsed_and_rethrows_original(
     outcome = await agent.resume("run-cancel", decision)
 
     assert outcome.final_text == "saved"
-    graph = await agent.build_graph()
-    snapshot = await graph.aget_state(
-        {"configurable": {"thread_id": "run-cancel"}}
-    )
-    assert snapshot.values["remaining_timeout_seconds"] == 3
+    assert agent.remaining_timeout_seconds("run-cancel") == 3
     assert mcp.calls == [
         ("write_file", {"path": "b.py", "content": "new"})
     ]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_persistence_reraises_after_the_budget_write(
+    tmp_path,
+) -> None:
+    clock = MutableMonotonic()
+    agent, model, mcp = make_agent(
+        tmp_path,
+        [
+            ai_with_calls(tool_call("call-read", "read_file", {"path": "a.py"})),
+            AIMessage(content="done"),
+        ],
+        timeout_seconds=10,
+        monotonic=clock,
+    )
+    store = InterferingBudgetStore(agent._budgets)
+    agent._budgets = store
+
+    run = asyncio.create_task(agent.start("inspect"))
+    store.cancel_target = run
+
+    with pytest.raises(asyncio.CancelledError):
+        await run
+
+    assert len(model.seen_messages) == 2
+    assert mcp.calls == [("read_file", {"path": "a.py"})]
+    assert store.saved == [10]
+    assert agent.remaining_timeout_seconds("run-1") == 10
+
+
+@pytest.mark.asyncio
+async def test_budget_sidecar_write_failure_is_never_swallowed(tmp_path) -> None:
+    agent, _, _ = make_agent(
+        tmp_path,
+        [AIMessage(content="done")],
+        timeout_seconds=10,
+    )
+    store = InterferingBudgetStore(agent._budgets)
+    store.fail_on_save = True
+    agent._budgets = store
+
+    with pytest.raises(OSError, match="budget sidecar"):
+        await agent.start("inspect")
+
+
+@pytest.mark.asyncio
+async def test_same_run_claim_stops_a_concurrent_resume_double_deduction(
+    tmp_path,
+) -> None:
+    clock = MutableMonotonic()
+    agent, _, _ = make_agent(
+        tmp_path,
+        [
+            ai_with_calls(
+                tool_call(
+                    "call-write",
+                    "write_file",
+                    {"path": "b.py", "content": "new"},
+                )
+            ),
+            AIMessage(content="saved"),
+        ],
+        mcp=YieldingBuildMCP(clock),
+        timeout_seconds=10,
+        monotonic=clock,
+    )
+    pending = await agent.start("change")
+    assert agent.remaining_timeout_seconds("run-1") == 9
+    decision = ResumeDecision(
+        action="approve",
+        digest=pending.pending_approval.digest,
+    )
+
+    results = await asyncio.gather(
+        agent.resume("run-1", decision),
+        agent.resume("run-1", decision),
+        return_exceptions=True,
+    )
+
+    outcomes = [result for result in results if not isinstance(result, BaseException)]
+    rejections = [result for result in results if isinstance(result, RunClaimedError)]
+    assert len(outcomes) == 1
+    assert outcomes[0].final_text == "saved"
+    assert len(rejections) == 1
+    assert agent.remaining_timeout_seconds("run-1") == 8
+
+
+@pytest.mark.asyncio
+async def test_timeout_budget_lives_only_in_the_sidecar(tmp_path) -> None:
+    clock = MutableMonotonic()
+    agent, _, _ = make_agent(
+        tmp_path,
+        [AIMessage(content="done")],
+        timeout_seconds=10,
+        monotonic=clock,
+    )
+
+    outcome = await agent.start("inspect")
+
+    assert outcome.final_text == "done"
+    graph = await agent.build_graph()
+    snapshot = await graph.aget_state(
+        {"configurable": {"thread_id": "run-1"}}
+    )
+    assert "remaining_timeout_seconds" not in snapshot.values
+    assert agent.remaining_timeout_seconds("run-1") == 10
 
 
 @pytest.mark.asyncio
@@ -1125,11 +1245,7 @@ async def test_exhausted_model_retries_raise_documented_error(tmp_path) -> None:
     with pytest.raises(ResponsesRetryError, match="2 attempts"):
         await agent.start("inspect")
     assert len(model.seen_messages) == 2
-    graph = await agent.build_graph()
-    snapshot = await graph.aget_state(
-        {"configurable": {"thread_id": "run-1"}}
-    )
-    assert snapshot.values["remaining_timeout_seconds"] == 8
+    assert agent.remaining_timeout_seconds("run-1") == 8
 
 
 @pytest.mark.asyncio
