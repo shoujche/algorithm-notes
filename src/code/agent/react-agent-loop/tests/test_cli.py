@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -25,6 +27,16 @@ class RaisingRunner:
 
     async def __call__(self, command: str, args: object) -> RunOutcome:
         raise self.error
+
+
+class SyntheticSchemaError(ValueError):
+    pass
+
+
+class ExplodingOutcome:
+    @property
+    def pending_approval(self) -> object:
+        raise ValueError("render sentinel-do-not-echo")
 
 
 def invoke(
@@ -64,7 +76,7 @@ def invoke(
 def test_decisions_are_mutually_exclusive() -> None:
     parser = cli.build_parser()
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(cli.SafeCliError, match="invalid command-line arguments"):
         parser.parse_args(
             ["openai", "--resume", "run-1", "--approve", "--reject", "no"]
         )
@@ -130,7 +142,7 @@ def test_edit_json_is_an_approval_decision_and_reject_cannot_edit(
     )
 
     assert code == 2
-    assert "not allowed with argument --reject" in error
+    assert error.strip() == "error: invalid command-line arguments"
     assert runner.calls == []
 
 
@@ -243,11 +255,11 @@ def test_missing_api_key_does_not_echo_environment_values(
     [
         (
             RuntimeError("Docker executable 'private-wrapper-name' not found"),
-            "error: Docker is required or unavailable",
+            "error: implementation failed: dependency unavailable",
         ),
         (
             RuntimeError("api_key value was private-key-value"),
-            "error: OPENAI_API_KEY is required",
+            "error: implementation failed: dependency unavailable",
         ),
     ],
 )
@@ -282,6 +294,122 @@ def test_dependency_construction_errors_are_sanitized(
     assert captured.out == ""
     assert captured.err.strip() == expected
     assert "private" not in captured.err
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (
+            SyntheticSchemaError(
+                "schema rejected synthetic_api_key=sentinel-do-not-echo"
+            ),
+            "error: implementation failed: validation rejected",
+        ),
+        (
+            Exception("runtime sentinel-do-not-echo"),
+            "error: implementation failed: runtime failed",
+        ),
+    ],
+)
+def test_entrypoint_errors_never_echo_external_values(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    failure: Exception,
+    expected: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    skills = tmp_path / "skills"
+    workspace.mkdir()
+    skills.mkdir()
+    monkeypatch.setattr(cli, "_run_entrypoint", RaisingRunner(failure))
+    monkeypatch.setattr(cli.shutil, "which", lambda _: "/usr/bin/docker")
+    monkeypatch.setenv("OPENAI_API_KEY", "present-only-for-test")
+
+    code = cli.main(
+        [
+            "openai",
+            "answer",
+            "--workspace",
+            str(workspace),
+            "--skills",
+            str(skills),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert code == 2
+    assert captured.out == ""
+    assert captured.err.strip() == expected
+    assert "sentinel-do-not-echo" not in captured.err
+    assert "synthetic_api_key" not in captured.err
+
+
+def test_rendering_errors_are_also_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    code, _, output, error = invoke(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        ["openai", "answer"],
+        outcome=ExplodingOutcome(),  # type: ignore[arg-type]
+    )
+
+    assert code == 2
+    assert output == ""
+    assert error.strip() == "error: implementation failed: validation rejected"
+    assert "sentinel-do-not-echo" not in error
+
+
+def test_import_cli_does_not_load_runtime_frameworks() -> None:
+    script = """
+import json
+import sys
+import cli
+
+forbidden = {
+    "agent_core.checkpoints",
+    "agent_core.contracts",
+    "langchain",
+    "langgraph",
+    "mcp",
+    "openai",
+    "pydantic",
+}
+loaded = sorted(
+    name for name in sys.modules
+    if name in forbidden or name.split(".", 1)[0] in forbidden
+)
+print(json.dumps(loaded))
+"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(cli.__file__).parent,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+    assert json.loads(completed.stdout) == []
+
+
+def test_bad_cli_argument_does_not_enter_runtime_wiring() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(Path(cli.__file__)), "--bad"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert completed.stderr.strip() == "error: invalid command-line arguments"
 
 
 def test_argument_validation_precedes_dependency_checks(

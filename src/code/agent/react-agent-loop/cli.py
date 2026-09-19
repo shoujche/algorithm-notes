@@ -9,19 +9,53 @@ import os
 import re
 import shutil
 import sys
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from agent_core.checkpoints import contains_secret
-from agent_core.contracts import RunOutcome, to_json_value
+if TYPE_CHECKING:
+    from agent_core.contracts import RunOutcome
 
 PAUSED_EXIT_CODE = 3
 _RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 _IMPLEMENTATIONS = ("openai", "langchain", "langgraph")
+_SECRET_PATTERN = re.compile(
+    r"(?:\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b|"
+    r"\bgh[pousr]_[A-Za-z0-9]{20,}\b|"
+    r"\bAIza[A-Za-z0-9_-]{35}\b|"
+    r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|"
+    r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b|"
+    r"\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b|"
+    r"-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|"
+    r"\bBearer\s+[A-Za-z0-9._~+/=-]{16,})",
+    re.IGNORECASE,
+)
+_SENSITIVE_KEY_PARTS = frozenset(
+    {
+        "authorization",
+        "credential",
+        "credentials",
+        "password",
+        "passwd",
+        "secret",
+        "secrets",
+        "token",
+        "tokens",
+    }
+)
+
+
+class SafeCliError(Exception):
+    """A fixed, reviewed message that is safe to print to stderr."""
+
+
+class SafeArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise SafeCliError("invalid command-line arguments")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = SafeArgumentParser(
         description="Run any of the three resumable ReAct implementations."
     )
     subparsers = parser.add_subparsers(dest="implementation", required=True)
@@ -52,18 +86,18 @@ def build_parser() -> argparse.ArgumentParser:
 def _validated_arguments(args: argparse.Namespace) -> argparse.Namespace:
     if args.resume is None:
         if not args.user_input:
-            raise ValueError("user input is required for a new run")
+            raise SafeCliError("user input is required for a new run")
         if args.approve or args.reject is not None or args.edit_json is not None:
-            raise ValueError("decision flags require --resume")
+            raise SafeCliError("decision flags require --resume")
     else:
         if not _RUN_ID_PATTERN.fullmatch(args.resume):
-            raise ValueError(
+            raise SafeCliError(
                 "run_id may contain only letters, digits, '-' and '_'"
             )
         if args.user_input:
-            raise ValueError("user input cannot be combined with --resume")
+            raise SafeCliError("user input cannot be combined with --resume")
         if not (args.approve or args.reject is not None or args.edit_json):
-            raise ValueError(
+            raise SafeCliError(
                 "--approve, --reject, or --edit-json is required with --resume"
             )
 
@@ -73,9 +107,11 @@ def _validated_arguments(args: argparse.Namespace) -> argparse.Namespace:
         try:
             edited = json.loads(args.edit_json.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
-            raise ValueError("--edit-json must name a readable JSON file") from error
+            raise SafeCliError(
+                "--edit-json must name a readable JSON file"
+            ) from error
         if not isinstance(edited, dict):
-            raise ValueError("--edit-json must contain a JSON object")
+            raise SafeCliError("--edit-json must contain a JSON object")
         args.edit_arguments = json.dumps(
             edited,
             ensure_ascii=False,
@@ -92,26 +128,34 @@ def _existing_directory(path: Path, label: str) -> Path:
     try:
         resolved = path.resolve(strict=True)
     except (OSError, RuntimeError) as error:
-        raise ValueError(f"{label} must be an existing directory") from error
+        raise SafeCliError(f"{label} must be an existing directory") from error
     if not resolved.is_dir():
-        raise ValueError(f"{label} must be an existing directory")
+        raise SafeCliError(f"{label} must be an existing directory")
     return resolved
 
 
 def _check_dependencies() -> None:
     if shutil.which("docker") is None:
-        raise RuntimeError("Docker is required but was not found on PATH")
+        raise SafeCliError("Docker is required but was not found on PATH")
     if not os.environ.get("OPENAI_API_KEY"):
-        raise RuntimeError("OPENAI_API_KEY is required")
+        raise SafeCliError("OPENAI_API_KEY is required")
 
 
-def _safe_execution_error(error: Exception) -> RuntimeError:
-    description = str(error).lower()
-    if "docker" in description:
-        return RuntimeError("Docker is required or unavailable")
-    if "api_key" in description or "api key" in description:
-        return RuntimeError("OPENAI_API_KEY is required")
-    return RuntimeError("agent execution failed")
+def _implementation_error(error: Exception) -> SafeCliError:
+    error_name = type(error).__name__
+    if isinstance(error, ValueError) or error_name in {
+        "SchemaError",
+        "ValidationError",
+    }:
+        category = "validation rejected"
+    elif isinstance(
+        error,
+        (ImportError, FileNotFoundError, RuntimeError),
+    ):
+        category = "dependency unavailable"
+    else:
+        category = "runtime failed"
+    return SafeCliError(f"implementation failed: {category}")
 
 
 async def _run_entrypoint(
@@ -133,9 +177,58 @@ async def _run_entrypoint(
     return await _run(args)
 
 
+def _json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _json_value(child) for key, child in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_value(child) for child in value]
+    return value
+
+
+def _normalized_key(key: str) -> str:
+    snake_case = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key)
+    return re.sub(r"[^a-z0-9]+", "_", snake_case.lower()).strip("_")
+
+
+def _sensitive_key(key: str) -> bool:
+    normalized = _normalized_key(key)
+    parts = set(normalized.split("_"))
+    return bool(
+        parts & _SENSITIVE_KEY_PARTS
+        or {"api", "key"} <= parts
+        or {"private", "key"} <= parts
+        or normalized in {"apikey", "privatekey"}
+    )
+
+
+def _contains_secret(value: Any) -> bool:
+    if value is None or type(value) in {bool, int, float}:
+        return False
+    if isinstance(value, str):
+        if _SECRET_PATTERN.search(value):
+            return True
+        return any(
+            _sensitive_key(label)
+            and re.search(
+                rf"{re.escape(label)}\s*[\"']?\s*[:=]\s*\S+",
+                value,
+                re.IGNORECASE,
+            )
+            for label in re.findall(r"[A-Za-z][A-Za-z0-9_-]*", value)
+        )
+    if isinstance(value, Mapping):
+        return any(
+            _sensitive_key(str(key)) or _contains_secret(child)
+            for key, child in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return any(_contains_secret(child) for child in value)
+    return True
+
+
 def _redacted(value: Any) -> Any:
-    converted = to_json_value(value)
-    return "[REDACTED]" if contains_secret(converted) else converted
+    converted = _json_value(value)
+    return "[REDACTED]" if _contains_secret(converted) else converted
 
 
 def render_outcome(outcome: RunOutcome) -> dict[str, Any]:
@@ -147,7 +240,7 @@ def render_outcome(outcome: RunOutcome) -> dict[str, Any]:
         }
 
     request = outcome.pending_approval
-    arguments = to_json_value(request.proposal.arguments)
+    arguments = _json_value(request.proposal.arguments)
     target = arguments.get("path") or arguments.get("cwd")
     return {
         "event": "paused",
@@ -173,23 +266,21 @@ def main(argv: list[str] | None = None) -> int:
         _check_dependencies()
         try:
             outcome = asyncio.run(_run_entrypoint(args.implementation, args))
-        except ValueError:
-            raise
+            paused = outcome.pending_approval is not None
+            rendered = json.dumps(
+                render_outcome(outcome),
+                ensure_ascii=False,
+                sort_keys=True,
+                allow_nan=False,
+            )
         except Exception as error:
-            raise _safe_execution_error(error) from error
-    except (ValueError, RuntimeError) as error:
+            raise _implementation_error(error) from error
+    except SafeCliError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
-    print(
-        json.dumps(
-            render_outcome(outcome),
-            ensure_ascii=False,
-            sort_keys=True,
-            allow_nan=False,
-        )
-    )
-    return PAUSED_EXIT_CODE if outcome.pending_approval is not None else 0
+    print(rendered)
+    return PAUSED_EXIT_CODE if paused else 0
 
 
 if __name__ == "__main__":
