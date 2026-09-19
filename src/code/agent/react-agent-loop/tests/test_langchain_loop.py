@@ -269,6 +269,85 @@ def test_json_memory_saver_rejects_persisted_config_metadata_without_mutation(
     )
 
 
+def _checkpoint_ids(saver: JsonMemorySaver) -> list[str]:
+    return sorted(
+        item.config["configurable"]["checkpoint_id"]
+        for item in saver.list(None)
+    )
+
+
+def test_put_serialization_failure_preserves_memory_and_disk(tmp_path) -> None:
+    path = tmp_path / "langchain.json"
+    saver = JsonMemorySaver(path)
+    original = empty_checkpoint()
+    saver.put(
+        {"configurable": {"thread_id": "run-good", "checkpoint_ns": ""}},
+        original,
+        {},
+        {},
+    )
+    before_disk = path.read_bytes()
+    before_ids = _checkpoint_ids(saver)
+    rejected = empty_checkpoint()
+
+    with pytest.raises(ValueError, match="Out of range float"):
+        saver.put(
+            {
+                "configurable": {
+                    "thread_id": "run-bad",
+                    "checkpoint_ns": "",
+                    "checkpoint_id": float("nan"),
+                }
+            },
+            rejected,
+            {},
+            {},
+        )
+
+    assert path.read_bytes() == before_disk
+    assert _checkpoint_ids(saver) == before_ids
+    assert (
+        saver.get_tuple(
+            {"configurable": {"thread_id": "run-bad", "checkpoint_ns": ""}}
+        )
+        is None
+    )
+    assert list(tmp_path.glob("langchain.json.*.tmp")) == []
+
+
+def test_put_writes_serialization_failure_preserves_memory_and_disk(
+    tmp_path,
+) -> None:
+    path = tmp_path / "langchain.json"
+    saver = JsonMemorySaver(path)
+    checkpoint = empty_checkpoint()
+    config = saver.put(
+        {"configurable": {"thread_id": "run-good", "checkpoint_ns": ""}},
+        checkpoint,
+        {},
+        {},
+    )
+    before_disk = path.read_bytes()
+    before = saver.get_tuple(config)
+    assert before is not None
+    assert before.pending_writes == []
+
+    with pytest.raises(ValueError, match="Out of range float"):
+        saver.put_writes(
+            config,
+            [("messages", {"content": "safe"})],
+            "task-bad",
+            task_path=float("nan"),
+        )
+
+    assert path.read_bytes() == before_disk
+    after = saver.get_tuple(config)
+    assert after is not None
+    assert after.pending_writes == []
+    assert _checkpoint_ids(saver) == [checkpoint["id"]]
+    assert list(tmp_path.glob("langchain.json.*.tmp")) == []
+
+
 @dataclass(slots=True)
 class SlottedEnvelope:
     payload: Any

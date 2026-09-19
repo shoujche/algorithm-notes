@@ -116,8 +116,8 @@ class JsonMemorySaver(InMemorySaver):
                 new_versions,
             )
             self._validate_candidate(candidate)
+            self._sync_unlocked(candidate)
             self._adopt(candidate)
-            self._sync_unlocked()
             return result
 
     def put_writes(self, config, writes, task_id, task_path="") -> None:
@@ -128,8 +128,8 @@ class JsonMemorySaver(InMemorySaver):
             candidate = self._copy_store()
             candidate.put_writes(config, writes, task_id, task_path)
             self._validate_candidate(candidate)
+            self._sync_unlocked(candidate)
             self._adopt(candidate)
-            self._sync_unlocked()
 
     def delete_thread(self, thread_id: str) -> None:
         with _exclusive_file_lock(self.lock_path):
@@ -175,7 +175,8 @@ class JsonMemorySaver(InMemorySaver):
                 value
             )
 
-    def _sync_unlocked(self) -> None:
+    def _sync_unlocked(self, source: InMemorySaver | None = None) -> None:
+        source = source or self
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.path.parent, 0o700)
         payload = {
@@ -188,7 +189,7 @@ class JsonMemorySaver(InMemorySaver):
                     _encode_typed(metadata),
                     parent,
                 ]
-                for thread_id, namespaces in self.storage.items()
+                for thread_id, namespaces in source.storage.items()
                 for namespace, checkpoints in namespaces.items()
                 for checkpoint_id, (checkpoint, metadata, parent) in checkpoints.items()
             ],
@@ -208,7 +209,7 @@ class JsonMemorySaver(InMemorySaver):
                     thread_id,
                     namespace,
                     checkpoint_id,
-                ), writes in self.writes.items()
+                ), writes in source.writes.items()
                 for (
                     task_key,
                     index,
@@ -226,7 +227,7 @@ class JsonMemorySaver(InMemorySaver):
                     namespace,
                     channel,
                     version,
-                ), value in self.blobs.items()
+                ), value in source.blobs.items()
             ],
         }
         _atomic_json_replace(self.path, payload)
