@@ -144,7 +144,7 @@ export const chapters: Chapter[] = [
     cn: 'ReAct Agent 循环',
     en: 'ReAct Agent Loop',
     summary: '从最小循环到 Skills、MCP、Docker 沙盒与 Human-in-the-loop，对比三种 Agent 编排方式。',
-    ready: false,
+    ready: true,
     sections: [
       { id: 'mental-model', num: '01', label: 'ReAct 最小心智模型' },
       { id: 'state', num: '02', label: '状态与退出条件' },

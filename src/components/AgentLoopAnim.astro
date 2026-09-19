@@ -1,0 +1,338 @@
+---
+// ReAct Agent 循环分步演示：一条被分段着色的执行轨道 + 四个真实 RunState 字段。
+// 七个站点写死在模板里，脚本只切换 class 与 textContent，不做任何 innerHTML 拼接。
+// 颜色沿用站内动画约定：橙＝当前、青＝已走过、钴蓝＝等待人工。
+const stops = [
+  { id: 'user', name: '用户', side: '宿主 CLI' },
+  { id: 'model', name: '模型', side: '宿主 · Responses' },
+  { id: 'policy', name: '策略', side: '宿主 · policy' },
+  { id: 'approval', name: '审批', side: '人工决定' },
+  { id: 'sandbox', name: '沙盒', side: 'Docker 容器' },
+  { id: 'observe', name: '观察', side: '宿主回填' },
+  { id: 'answer', name: '回答', side: '宿主输出' },
+];
+---
+<div
+  class="stage"
+  id="agent-loop"
+  role="group"
+  tabindex="0"
+  aria-label="ReAct Agent 循环分步演示，可用左右方向键切换步骤"
+>
+  <div class="grid">
+    <ol class="al-track" aria-label="Agent 执行轨道">
+      {stops.map((s) => (
+        <li class="al-stop" data-stop={s.id}>
+          <span class="al-n">{s.name}</span>
+          <span class="al-s">{s.side}</span>
+        </li>
+      ))}
+    </ol>
+  </div>
+  <div class="panel">
+    <div class="state-vars">
+      <span class="curr">tool <b id="agent-loop-tool">—</b></span>
+      <span class="next">risk <b id="agent-loop-risk">—</b></span>
+      <span>checkpoint <b id="agent-loop-checkpoint">尚未创建</b></span>
+      <span class="prev">side effect <b id="agent-loop-effect">无</b></span>
+    </div>
+    <div class="controls">
+      <button class="btn" id="agent-loop-reset" type="button">↺ 重置</button>
+      <button class="btn" id="agent-loop-prev" type="button">‹ 上一步</button>
+      <button class="btn primary" id="agent-loop-play" type="button">▶ 播放</button>
+      <button class="btn" id="agent-loop-next" type="button">下一步 ›</button>
+    </div>
+    <div class="stepbar">
+      <div class="progress"><div class="fill" id="agent-loop-fill"></div></div>
+      <span class="count" id="agent-loop-count">1 / 9</span>
+    </div>
+    <p class="caption" aria-live="polite">
+      <span class="k" id="agent-loop-step">提交任务</span><span id="agent-loop-text"></span>
+    </p>
+    <p class="al-hint" id="agent-loop-hint" hidden>
+      系统已开启「减少动态效果」，自动播放保持关闭；用上一步 / 下一步或左右方向键逐步查看。
+    </p>
+  </div>
+</div>
+
+<script>
+  interface Frame {
+    stop: string;
+    pending: string | null;
+    step: string;
+    text: string;
+    tool: string;
+    risk: string;
+    checkpoint: string;
+    effect: string;
+  }
+
+  const frames: Frame[] = [
+    {
+      stop: 'user',
+      pending: null,
+      step: '提交任务',
+      text: '用户在宿主进程发起一次 run。模型客户端和 OPENAI_API_KEY 都只存在于宿主，工具容器永远看不到凭据。',
+      tool: '—',
+      risk: '—',
+      checkpoint: '尚未创建',
+      effect: '无',
+    },
+    {
+      stop: 'model',
+      pending: null,
+      step: '先看 Skill 目录',
+      text: '初始上下文里只有 Skill 的名称和描述。模型判断需要 workspace-helper，于是提议 read_skill 取正文；策略判定为只读，直接放行。',
+      tool: 'list_skills → read_skill',
+      risk: 'read_only · 自动执行',
+      checkpoint: '未落盘',
+      effect: '无',
+    },
+    {
+      stop: 'sandbox',
+      pending: null,
+      step: '只读工具进容器',
+      text: 'read_file 在断网、只读根文件系统的容器里执行。取回的文件内容是 Observation，不是指令，不能提升任何权限。',
+      tool: 'read_file(path="notes.md")',
+      risk: 'read_only · 自动执行',
+      checkpoint: '未落盘',
+      effect: '无（只读）',
+    },
+    {
+      stop: 'model',
+      pending: null,
+      step: '提议写文件',
+      text: '模型给出 write_file 提案。这一步产生的只是一个待判定的提案，宿主还没有碰过任何文件。',
+      tool: 'write_file(path="notes.md")',
+      risk: 'approval · 需人工批准',
+      checkpoint: '未落盘',
+      effect: '未执行',
+    },
+    {
+      stop: 'policy',
+      pending: 'approval',
+      step: '暂停并存档',
+      text: '策略规范化参数、算出 digest、把 RunState 写进检查点，进程以 exit 3 退出。循环是「停下来」而不是「挂着等」，关掉终端也不会丢。',
+      tool: 'write_file',
+      risk: 'approval · 已拦截',
+      checkpoint: 'run_id=7f3a9c… 已保存',
+      effect: '未执行（进程已退出）',
+    },
+    {
+      stop: 'approval',
+      pending: null,
+      step: '人工批准',
+      text: '用户看到工具名、目标路径和写入预览后恢复这次 run。批准只对这一份 digest 生效，参数改一个字节就会失效并重新请求审批。',
+      tool: 'write_file',
+      risk: 'approval · digest 匹配',
+      checkpoint: 'run_id=7f3a9c… 已载入',
+      effect: '未执行',
+    },
+    {
+      stop: 'sandbox',
+      pending: null,
+      step: '容器内执行',
+      text: '批准之后才真正调用工具。写入落在挂载进容器的 workspace 上，call_id 同时被记进执行账本，重放不会写第二次。',
+      tool: 'write_file',
+      risk: 'approval · 已批准',
+      checkpoint: 'executed_call_ids += call_id',
+      effect: '已执行 1 次',
+    },
+    {
+      stop: 'observe',
+      pending: null,
+      step: 'Observation 回流',
+      text: '工具结果按原来的 call_id 作为 function_call_output 回填给模型，配对靠 call_id，不靠顺序。',
+      tool: 'write_file → observation',
+      risk: '—',
+      checkpoint: '已更新',
+      effect: '已执行 1 次',
+    },
+    {
+      stop: 'answer',
+      pending: null,
+      step: '最终回答',
+      text: '这一轮模型不再要求任何工具，输出的文本就是最终回答，循环在轮次与预算上限内正常结束。',
+      tool: '—',
+      risk: '—',
+      checkpoint: 'run 结束',
+      effect: '已执行 1 次',
+    },
+  ];
+
+  const byId = (id: string) => document.getElementById(id)!;
+  const stage = byId('agent-loop');
+  const stopNodes = Array.from(stage.querySelectorAll<HTMLElement>('.al-stop'));
+  const toolNode = byId('agent-loop-tool');
+  const riskNode = byId('agent-loop-risk');
+  const checkpointNode = byId('agent-loop-checkpoint');
+  const effectNode = byId('agent-loop-effect');
+  const stepNode = byId('agent-loop-step');
+  const textNode = byId('agent-loop-text');
+  const countNode = byId('agent-loop-count');
+  const fillNode = byId('agent-loop-fill');
+  const hintNode = byId('agent-loop-hint');
+  const resetBtn = byId('agent-loop-reset') as HTMLButtonElement;
+  const prevBtn = byId('agent-loop-prev') as HTMLButtonElement;
+  const playBtn = byId('agent-loop-play') as HTMLButtonElement;
+  const nextBtn = byId('agent-loop-next') as HTMLButtonElement;
+
+  const last = frames.length - 1;
+  let idx = 0;
+  let timer: number | null = null;
+
+  function render() {
+    const frame = frames[idx];
+    const visited = new Set(frames.slice(0, idx).map((f) => f.stop));
+
+    stopNodes.forEach((node) => {
+      const stop = node.dataset.stop;
+      const active = stop === frame.stop;
+      node.classList.toggle('is-active', active);
+      node.classList.toggle('is-done', !active && visited.has(stop!));
+      node.classList.toggle('is-pending', !active && stop === frame.pending);
+      if (active) node.setAttribute('aria-current', 'step');
+      else node.removeAttribute('aria-current');
+    });
+
+    toolNode.textContent = frame.tool;
+    riskNode.textContent = frame.risk;
+    checkpointNode.textContent = frame.checkpoint;
+    effectNode.textContent = frame.effect;
+    stepNode.textContent = frame.step;
+    textNode.textContent = frame.text;
+    countNode.textContent = `${idx + 1} / ${frames.length}`;
+    fillNode.style.width = `${(idx / last) * 100}%`;
+    prevBtn.disabled = idx === 0;
+    nextBtn.disabled = idx === last;
+  }
+
+  function go(next: number) {
+    idx = Math.max(0, Math.min(last, next));
+    render();
+  }
+
+  function stop() {
+    if (timer !== null) {
+      clearInterval(timer);
+      timer = null;
+    }
+    playBtn.textContent = '▶ 播放';
+  }
+
+  function play() {
+    if (timer !== null) {
+      stop();
+      return;
+    }
+    if (idx === last) go(0);
+    playBtn.textContent = '⏸ 暂停';
+    timer = window.setInterval(() => {
+      if (idx >= last) {
+        stop();
+        return;
+      }
+      go(idx + 1);
+    }, 1600);
+  }
+
+  resetBtn.addEventListener('click', () => {
+    stop();
+    go(0);
+  });
+  prevBtn.addEventListener('click', () => {
+    stop();
+    go(idx - 1);
+  });
+  nextBtn.addEventListener('click', () => {
+    stop();
+    go(idx + 1);
+  });
+  playBtn.addEventListener('click', play);
+
+  stage.addEventListener('keydown', (event: KeyboardEvent) => {
+    const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+    if (!keys.includes(event.key)) return;
+    event.preventDefault();
+    stop();
+    if (event.key === 'ArrowLeft') go(idx - 1);
+    else if (event.key === 'ArrowRight') go(idx + 1);
+    else if (event.key === 'Home') go(0);
+    else go(last);
+  });
+
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+  function applyMotionPreference() {
+    if (reduced.matches) stop();
+    playBtn.disabled = reduced.matches;
+    hintNode.hidden = !reduced.matches;
+  }
+  reduced.addEventListener('change', applyMotionPreference);
+  applyMotionPreference();
+
+  render();
+</script>
+
+<style>
+  .stage:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .al-track {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+    gap: 10px;
+  }
+  .al-stop {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-top: 9px;
+    border-top: 3px solid var(--line-strong);
+    transition: border-color 0.2s, color 0.2s;
+  }
+  .al-stop .al-n {
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--muted);
+  }
+  .al-stop .al-s {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.2px;
+    color: var(--muted);
+  }
+  .al-stop.is-done {
+    border-top-color: var(--teal);
+  }
+  .al-stop.is-done .al-n {
+    color: var(--graphite);
+  }
+  .al-stop.is-pending {
+    border-top-color: var(--accent);
+  }
+  .al-stop.is-pending .al-n {
+    color: var(--accent-ink);
+  }
+  .al-stop.is-active {
+    border-top-color: var(--orange);
+  }
+  .al-stop.is-active .al-n {
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .al-stop.is-active .al-s {
+    color: var(--orange);
+  }
+  p.caption {
+    margin: 14px 0 0;
+  }
+  .al-hint {
+    margin: 10px 0 0;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+</style>

@@ -1,0 +1,532 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import Interview from '../../components/Interview.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import CodeTabs from '../../components/CodeTabs.astro';
+import AgentLoopAnim from '../../components/AgentLoopAnim.astro';
+import { chapters } from '../../data/topics';
+import {
+  CODE_DIR,
+  checkpointSave,
+  cliParser,
+  contractsFull,
+  langchainCreateAgent,
+  langchainImports,
+  langgraphBuildGraph,
+  langgraphRequestApproval,
+  mcpListFunctionTools,
+  mcpToolDefinitions,
+  openaiContinue,
+  openaiProcessCalls,
+  openaiResume,
+  openaiValidateArguments,
+  orchestrationVariants,
+  policyFull,
+  sandboxVariants,
+  skillDiscovery,
+  skillDoc,
+} from '../../data/react-agent-loop-code';
+import { ghBlob } from '../../lib/github';
+
+const chapter = chapters.find((c) => c.slug === 'react-agent-loop')!;
+const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
+---
+<BaseLayout title="ReAct Agent 循环 · Agent · 算法、Python 与 Agent 学习手记" active="agent">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Agent / {chapter.num} · ReAct Agent 循环</span>
+        <h2>把 <em>Agent</em> 拆开：<br />一个循环，五道护栏</h2>
+        <p>同一个可运行任务，分别用纯 OpenAI SDK、LangChain、LangGraph 写一遍 ReAct 循环，三版共享同一套 Skill 加载、MCP 工具、Docker 沙盒与审批策略。这样比较的才是<b>编排方式</b>，而不是三套互不相干的安全基础设施。本章按「问题 → 心智模型 → 数据流 → 真实代码 → 故障点 → 记忆提示 → 面试追问」推进。</p>
+        <div class="meta">
+          <div><span class="n">3</span><span class="l">编排方式</span></div>
+          <div><span class="n">6</span><span class="l">MCP 工具</span></div>
+          <div><span class="n">2</span><span class="l">需审批的工具</span></div>
+          <div><span class="n">Docker</span><span class="l">工具隔离</span></div>
+        </div>
+      </div>
+
+      <!-- 01 心智模型 -->
+      <section class="article" id="mental-model">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="核心 · ReAct" /></div>
+        <h3>ReAct 最小心智模型</h3>
+        <p class="lead"><b>问题</b>：一次普通的模型调用只会返回文字，Agent 到底多了什么？多出来的部分，哪些是你能观察、能测试、能落盘的？</p>
+        <Idea>
+          ReAct 是 <b>Reason → Act → Observe</b> 的缩写，但真正能写进代码的只有后两个。把它记成一句话：<b>模型只能「提议」调用工具，执行与否由你决定，执行结果再作为新的输入回到模型</b>。
+          <ol class="steps">
+            <li><b>Reason 不是可观察状态</b>：模型内部的推理过程你看不到，也不该伪造。本页所有动画和字段都只呈现协议里真实存在的东西：用户任务、模型输出的工具调用、工具参数、审批状态、工具结果、最终回答。</li>
+            <li><b>Act 是一个数据结构，不是一次执行</b>：模型给出的是 <kbd>ToolProposal</kbd>（call_id + 工具名 + 参数），执行权在宿主手里。</li>
+            <li><b>Observe 要能配对</b>：工具结果必须带着原来的 <kbd>call_id</kbd> 回填，模型才知道哪个结果对应哪次调用。</li>
+          </ol>
+          下面这条轨道就是本章要讲完的全部内容：七个站点，九步走完一次带审批的真实执行。
+        </Idea>
+        <AgentLoopAnim />
+        <h4 class="sub">数据流 · 一轮里数据怎么走</h4>
+        <ol class="flow">
+          <li><span class="s">01</span><span>宿主把<b>用户任务 + 工具 schema</b>发给模型（Skill 只给名称和描述）</span></li>
+          <li><span class="s">02</span><span>模型返回若干输出项；其中 <kbd>function_call</kbd> 项被转成 <b>ToolProposal</b></span></li>
+          <li><span class="s">03</span><span>确定性策略给每个提议打上 <b>read_only / approval / deny</b></span></li>
+          <li><span class="s">04</span><span>只读的直接执行，敏感的<b>存档并停下</b>等人批准</span></li>
+          <li><span class="s">05</span><span>工具结果封成 <kbd>function_call_output</kbd>，按 <b>call_id</b> 回填</span></li>
+          <li><span class="s">06</span><span>回到第 1 步；直到模型不再要工具，或预算用尽</span></li>
+        </ol>
+        <h4 class="sub">真实代码 · 三版共用的数据契约</h4>
+        <p>这份文件定义了整章的名词表。三种编排方式产生的事件序列之所以能互相对照、能被同一批测试覆盖，就是因为它们都落到这几个类型上。<kbd>FrozenMapping</kbd> 把参数冻成不可变结构，是为了让 digest 计算和重放比较有意义。</p>
+        <CodeBlock code={contractsFull} lang="python" file="agent_core/contracts.py" src={src('agent_core/contracts.py')} />
+        <h4 class="sub">故障点</h4>
+        <ul class="fail">
+          <li><b>把模型的自述当成执行记录</b>：模型说「我已经写好了文件」不代表文件被写过。唯一可信的是工具返回的 Observation。</li>
+          <li><b>在页面或日志里渲染「思维链」</b>：那是编出来的。可观察的只有工具调用与结果。</li>
+          <li><b>参数用可变字典到处传</b>：算完 hash 之后还能被改，审批就失去意义。</li>
+        </ul>
+        <p class="cue"><span class="t">记忆提示</span>模型只会提议，宿主才会执行；能落盘的只有提议、裁决和观察。</p>
+        <Interview q="ReAct 和普通的 tool calling 有什么区别?">
+          <p>协议层面没有区别，都是「模型输出工具调用 → 你执行 → 回填结果」。ReAct 强调的是<b>多轮</b>：模型可以根据上一轮的 Observation 改变下一步计划，而不是一次性规划完再执行。所以工程上真正要处理的是<b>循环</b>带来的问题——状态怎么存、什么时候停、失败怎么回喂、副作用怎么只发生一次。把 ReAct 当成「带记忆的 while 循环」比当成一种提示词技巧更准确。</p>
+        </Interview>
+        <Interview q="为什么强调「不展示模型的 chain-of-thought」?">
+          <p>两个原因。第一，<b>拿不到</b>：现代模型的内部推理要么不返回，要么是经过处理的摘要，把它当作执行依据会误导排查。第二，<b>会骗人</b>：自然语言的「我打算怎么做」和实际发出的工具调用可以不一致，真正决定系统行为的是 <kbd>function_call</kbd> 里的工具名和参数。所以可视化、日志、审批界面都应该基于结构化字段，而不是基于模型的叙述。</p>
+        </Interview>
+      </section>
+
+      <!-- 02 状态与退出条件 -->
+      <section class="article" id="state">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="mid" text="核心 · State" /></div>
+        <h3>循环必须保存的状态与退出条件</h3>
+        <p class="lead"><b>问题</b>：进程随时可能退出（等人审批、崩溃、被 Ctrl-C）。哪些东西必须落盘才能安全恢复？又有哪几种情况必须让循环停下来？</p>
+        <Idea>
+          把状态拆成四类，缺一类就会出事：
+          <ol class="steps">
+            <li><b>对话/响应状态</b>：模型侧的上下文标识（这里是 <kbd>response_id</kbd> 与待处理的 calls），恢复时才能接着上一轮说话。</li>
+            <li><b>预算计数</b>：<kbd>turn</kbd> / <kbd>tool_calls</kbd> 及其上限。预算是安全阀，不是优化项。</li>
+            <li><b>待审批调用</b>：<kbd>pending_approval</kbd>，带着风险等级、规范化参数、写入预览和 digest。</li>
+            <li><b>已执行账本</b>：<kbd>executed_call_ids</kbd>。恢复和重试时靠它判断「这次副作用是不是已经发生过」。</li>
+          </ol>
+          退出条件只有三种：<b>模型不再要工具</b>（正常结束）、<b>预算用尽</b>（安全终止）、<b>遇到敏感调用</b>（暂停，等人）。任何第四种「自己感觉差不多了」都是 bug。
+        </Idea>
+        <h4 class="sub">数据流 · 一轮结束时状态怎么变</h4>
+        <ol class="flow">
+          <li><span class="s">01</span><span>进入 <kbd>_continue</kbd> 前先比对 <b>turn 与 max_turns</b>，超了直接抛 BudgetExceeded</span></li>
+          <li><span class="s">02</span><span>拿到响应后 <b>turn + 1</b>，并清空上一轮的批准 / 拒绝记录</span></li>
+          <li><span class="s">03</span><span>没有 function_call → 拼出最终文本，<b>存一次终态检查点</b>后返回</span></li>
+          <li><span class="s">04</span><span>有 function_call → 先算<b>去重后的调用数</b>，超出工具预算就终止</span></li>
+          <li><span class="s">05</span><span>需要审批时把 <b>response_id + 原始 calls</b> 一起写进检查点，进程可以安全退出</span></li>
+        </ol>
+        <h4 class="sub">真实代码 · 循环主体与三个出口</h4>
+        <p>注意第一行的预算检查在<b>模型调用之前</b>，以及「没有 calls 就是最终回答」这个唯一的正常出口。清空 <kbd>approved_call_digests</kbd> 是关键细节：上一轮的批准不能顺延到下一轮。</p>
+        <CodeBlock code={openaiContinue} lang="python" file="agent_core/openai_loop.py" src={src('agent_core/openai_loop.py')} />
+        <p>检查点写盘走的是「临时文件 → fsync → 原子替换」，并且落盘前先扫一遍有没有像密钥的字段。审批期间这个文件就是唯一的真相来源，所以权限固定 0600、目录 0700。</p>
+        <CodeBlock code={checkpointSave} lang="python" file="agent_core/checkpoints.py" src={src('agent_core/checkpoints.py')} />
+        <h4 class="sub">故障点</h4>
+        <ul class="fail">
+          <li><b>只存消息、不存已执行 call_id</b>：恢复后模型看到同样的上下文，会再要求一次同样的写入，副作用发生两次。</li>
+          <li><b>没有轮次上限</b>：模型反复调工具却不给答案，token 一直烧。轮次、工具数、总超时、输出大小四个上限要一起设。</li>
+          <li><b>直接覆写检查点文件</b>：写到一半断电就同时失去新旧两份状态，必须原子替换。</li>
+          <li><b>把密钥写进状态</b>：检查点是明文 JSON，凭据只能留在环境变量里。</li>
+        </ul>
+        <p class="cue"><span class="t">记忆提示</span>三个出口：给答案、没预算、要审批；四类状态：上下文、预算、待审批、已执行。</p>
+        <Interview q="恢复一个 run 时，为什么必须校验参数 hash 而不是直接继续?">
+          <p>因为检查点和「批准」是两件事。检查点只说明「当时停在这个提案上」，批准必须绑定到<b>那一份具体参数</b>。如果恢复时不比对 digest，任何人（或任何代码路径）改掉检查点里的路径或内容，都能借着旧批准执行一次新的写入。代码里 <kbd>resume</kbd> 第一件事就是 <kbd>decision.digest != pending.digest</kbd> 就报错，编辑参数则重新校验 schema、重算 digest 再绑定。</p>
+        </Interview>
+        <Interview q="Agent 的「预算」到底该设几个?">
+          <p>至少四个，缺一个都能被绕过：<b>模型轮次</b>（防止无限对话）、<b>工具调用数</b>（防止一轮里刷出几十个调用）、<b>总时长</b>（防止某个工具挂住）、<b>单次输出大小</b>（防止一个超大文件把上下文撑爆）。LangGraph 版还额外统计 token 用量。预算耗尽时要<b>安全终止并说明原因</b>，而不是悄悄返回一个空答案。</p>
+        </Interview>
+      </section>
+
+      <!-- 03 Skills -->
+      <section class="article" id="skills">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="easy" text="能力 · Skills" /></div>
+        <h3>SKILL.md 与渐进式披露</h3>
+        <p class="lead"><b>问题</b>：你想教模型「改文件前先读、改完要验证」这类工作习惯。全塞进 system prompt 会把上下文撑爆，而且每加一条规则所有请求都要为它付费。怎么按需加载？</p>
+        <Idea>
+          文件式 Skill 的核心是 <b>progressive disclosure（渐进式披露）</b>：把能力拆成三层，模型需要哪层才加载哪层。
+          <ol class="steps">
+            <li><b>目录层（常驻）</b>：<kbd>list_skills</kbd> 只返回 name 和 description，几十个字，永远在上下文里。</li>
+            <li><b>正文层（按需）</b>：模型判断要用某个 Skill，才调 <kbd>read_skill</kbd> 把 SKILL.md 正文当作 Observation 取回。</li>
+            <li><b>资料层（再按需）</b>：Skill 里提到的具体文件，由普通文件工具去读。</li>
+          </ol>
+          两条硬约束：Skill 目录<b>只读挂载</b>，Agent 不能改写自己的规则；Skill 正文是<b>不可信数据</b>，它可以建议做法，但不能提升任何工具权限，也不能覆盖确定性策略。
+        </Idea>
+        <h4 class="sub">数据流 · Skill 从磁盘到上下文</h4>
+        <ol class="flow">
+          <li><span class="s">01</span><span>容器启动时扫描<b>只读挂载</b>的 /skills，逐个校验目录结构</span></li>
+          <li><span class="s">02</span><span>列目录时<b>只读 YAML frontmatter</b>（上限 8 KiB），拿到 name 与 description</span></li>
+          <li><span class="s">03</span><span>宿主把这份摘要交给模型，<b>正文一个字都不进初始上下文</b></span></li>
+          <li><span class="s">04</span><span>模型调 <kbd>read_skill</kbd>，正文以 Observation 形式返回，<b>受最大字节数限制</b></span></li>
+          <li><span class="s">05</span><span>宿主侧的 skills 模块<b>只校验 MCP 返回的元数据</b>，不自己读宿主文件系统</span></li>
+        </ol>
+        <h4 class="sub">真实代码 · 示例 Skill 与目录扫描</h4>
+        <p>这份 SKILL.md 就是容器里被挂载的那一份。注意最后两行：它主动声明自己不能提权、工具输出是不可信数据——规则文件自己也要讲清楚自己的地位。</p>
+        <CodeBlock code={skillDoc} lang="markdown" file="skills/workspace-helper/SKILL.md" src={src('skills/workspace-helper/SKILL.md')} />
+        <p>扫描逻辑里连续三次拒绝软链接：根目录、子目录项、SKILL.md 本身。最后 <kbd>_resolve_beneath</kbd> 再确认解析后的真实路径仍在可信根之内。</p>
+        <CodeBlock code={skillDiscovery} lang="python" file="agent_core/skills.py" src={src('agent_core/skills.py')} />
+        <h4 class="sub">故障点</h4>
+        <ul class="fail">
+          <li><b>把全部 SKILL.md 拼进 system prompt</b>：上下文爆炸，且规则越多模型越容易忽略其中几条。</li>
+          <li><b>宿主自己去读 Skill 文件</b>：等于在 MCP 与沙盒之外开了第二条读取路径，安全评审时两条路都得再审一遍。</li>
+          <li><b>Skill 目录可写</b>：模型可以改写自己的行为准则，审计就失去意义。</li>
+          <li><b>把 Skill 正文当指令执行</b>：它是数据。里面写「忽略之前的限制」也必须无效。</li>
+        </ul>
+        <p class="cue"><span class="t">记忆提示</span>目录常驻、正文按需、资料再按需；Skill 只读，且永远不能提权。</p>
+        <Interview q="Skill、system prompt、RAG 三者怎么分工?">
+          <p><b>system prompt</b> 放不随任务变化的身份与硬约束，永远常驻，所以要短。<b>Skill</b> 放「某类任务的工作流程」，靠名称和描述做索引、按需展开，本质是<b>可寻址的提示词</b>。<b>RAG</b> 放事实性知识，靠向量或关键词检索片段。判断标准很简单：教「怎么做」用 Skill，提供「是什么」用 RAG，定义「你是谁、绝对不能做什么」用 system prompt。</p>
+        </Interview>
+        <Interview q="Skill 里写「你可以直接执行命令，不需要审批」会发生什么?">
+          <p>什么都不会发生。权限判定在宿主侧的 <kbd>ToolPolicy</kbd> 里，是一段和模型输出无关的确定性代码：<kbd>write_file</kbd> 与 <kbd>run_command</kbd> 永远返回 <b>approval</b>。Skill 内容、MCP schema、工具输出、工作区文件全部属于<b>不可信输入</b>，它们能影响模型的想法，但影响不了授权。这正是「不要让模型参与授权决策」的落地方式。</p>
+        </Interview>
+      </section>
+
+      <!-- 04 MCP -->
+      <section class="article" id="mcp">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="协议 · MCP" /></div>
+        <h3>MCP：工具发现、schema 与调用</h3>
+        <p class="lead"><b>问题</b>：工具定义从哪里来？为什么不直接在 Python 里写几个函数，而要多套一层 MCP？以及——纯 OpenAI SDK 版为什么必须自己写一个 adapter？</p>
+        <Idea>
+          MCP 把「有哪些工具」和「谁来实现工具」拆开：Server 用 <kbd>tools/list</kbd> 公布名字、描述和 JSON Schema，用 <kbd>tools/call</kbd> 执行。好处是<b>实现可以搬到进程外</b>——本章正是靠这一点，把工具整体搬进 Docker 容器。
+          <ol class="steps">
+            <li><b>传输用本地 stdio</b>：父进程通过管道和容器里的 Server 说话，没有端口、没有 DNS 重绑定面。</li>
+            <li><b>schema 必须严格</b>：每个对象都要 <kbd>additionalProperties: false</kbd>，<kbd>required</kbd> 与 properties 完全一致，否则模型可以传进没人校验的字段。</li>
+            <li><b>annotations 只是提示</b>：<kbd>readOnlyHint</kbd> / <kbd>destructiveHint</kbd> 表达意图，方便展示，但<b>授权由宿主 policy 决定</b>。Server 说自己只读不算数。</li>
+            <li><b>本地 stdio 需要自己适配</b>：OpenAI 托管的 MCP 面向<b>OpenAI 服务能访问到的 Streamable HTTP / SSE Server</b>，连不到你本机容器里的 stdio Server。所以纯 SDK 版把 <kbd>tools/list</kbd> 的结果转换成 Responses 的 function tools，再把结果以 <kbd>function_call_output</kbd> 带原 call_id 回传。这样三版才能公平复用同一个沙盒。</li>
+          </ol>
+        </Idea>
+        <h4 class="sub">数据流 · 一次工具调用的完整往返</h4>
+        <ol class="flow">
+          <li><span class="s">01</span><span>宿主启动容器，<b>stdio 管道</b>连上容器里的 MCP Server</span></li>
+          <li><span class="s">02</span><span><kbd>tools/list</kbd> 返回六个工具的 schema 与 annotations</span></li>
+          <li><span class="s">03</span><span>adapter 校验后转成 <b>strict function tools</b> 交给 Responses API</span></li>
+          <li><span class="s">04</span><span>模型给出 function_call，宿主用<b>同一份 schema</b> 再校验一次参数</span></li>
+          <li><span class="s">05</span><span><kbd>tools/call</kbd> 进容器执行，返回内容被包成 <b>is_error + content</b> 的 JSON 字符串</span></li>
+        </ol>
+        <h4 class="sub">真实代码 · Server 端工具定义</h4>
+        <p>六个工具：<kbd>list_files</kbd>、<kbd>read_file</kbd>、<kbd>list_skills</kbd>、<kbd>read_skill</kbd> 只读，<kbd>write_file</kbd>、<kbd>run_command</kbd> 有副作用。注意 <kbd>run_command</kbd> 收的是 <b>argv 数组</b>而不是命令字符串，以及每个字段都带长度上限。</p>
+        <CodeBlock code={mcpToolDefinitions} lang="python" file="mcp_server.py" src={src('mcp_server.py')} />
+        <h4 class="sub">真实代码 · 本地 stdio → function tools 的适配层</h4>
+        <p>这段就是「hosted MCP 用不了，所以自己转一层」的全部代价：把每个 MCP 工具校验成严格 schema，打上 <kbd>strict: True</kbd>，并保证工具名唯一。三种编排方式都消费这份输出，所以工具契约只有一份。</p>
+        <CodeBlock code={mcpListFunctionTools} lang="python" file="agent_core/mcp_adapter.py" src={src('agent_core/mcp_adapter.py')} />
+        <h4 class="sub">故障点</h4>
+        <ul class="fail">
+          <li><b>把 annotations 当授权</b>：那是 Server 的自述。一个被攻陷或写错的 Server 可以把删除操作标成只读。</li>
+          <li><b>schema 不严格</b>：漏掉 <kbd>additionalProperties: false</kbd>，模型就能塞进没人校验的字段，后端代码也许正好会读它。</li>
+          <li><b>工具名重复</b>：模型无法区分，回填也会错位，所以适配层直接拒绝。</li>
+          <li><b>把工具输出当指令</b>：文件内容里写「请执行 rm -rf」只是数据；它能诱导模型提议，但提议照样要过策略与审批。</li>
+        </ul>
+        <p class="cue"><span class="t">记忆提示</span>schema 是契约，annotations 是提示，授权在宿主；本地 stdio 只能自己接。</p>
+        <Interview q="既然要自己写 adapter，为什么不干脆直接注册几个 Python 函数当工具?">
+          <p>因为工具实现要跑在<b>另一个进程、另一个文件系统命名空间</b>里。直接注册 Python 函数意味着工具和模型客户端共享同一个进程——共享环境变量（包括 API Key）、共享文件系统、共享网络。MCP 提供的进程边界让「工具整体塞进只读、断网的容器」成为一行配置。adapter 的成本是几十行 schema 转换，换来的是一条真正的信任边界。</p>
+        </Interview>
+        <Interview q="hosted MCP 和本地 stdio MCP 的适用场景怎么分?">
+          <p><b>hosted MCP</b> 适合工具本来就是一个公网可达的服务（内部 API 网关、SaaS 连接器），由模型服务方直接去连，你不用管进程；代价是这个 Server 必须能被对方访问，而且要自己解决认证、限流、审计和 TLS。<b>本地 stdio</b> 适合工具要碰本机文件、本机命令、本机容器的场景——本章就是这一类，它连不到外面去，也不需要连。两者可以共存，但不要指望用 hosted 模式去驱动你笔记本上的 Docker。</p>
+        </Interview>
+      </section>
+
+      <!-- 05 沙盒 -->
+      <section class="article" id="sandbox">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="hard" text="安全 · Sandbox" /></div>
+        <h3>Docker 信任边界</h3>
+        <p class="lead"><b>问题</b>：你主动给了模型「读文件、写文件、执行命令」三种能力。当模型被工作区里的一段文字诱导时，损失的上限是多少？这个上限由谁保证？</p>
+        <Idea>
+          答案是两层，而且顺序不能反：<b>先校验输入，再靠容器兜底</b>。
+          <ol class="steps">
+            <li><b>第一层 · 输入校验</b>：路径必须相对、不含 <kbd>..</kbd>、逐级打开时带 <kbd>O_NOFOLLOW</kbd> 拒绝软链接；命令只收 argv 数组，首元素必须在允许清单里，<kbd>shell=False</kbd>，永远不拼命令行。</li>
+            <li><b>第二层 · 容器隔离</b>：非 root 用户、只读根文件系统、<kbd>--network none</kbd>、<kbd>--cap-drop ALL</kbd>、<kbd>no-new-privileges</kbd>、CPU / 内存 / PID / 超时 / 输出大小全部有上限，Skill 目录只读挂载，<b>不传入任何宿主凭据</b>。</li>
+          </ol>
+          反过来做会出事：只有容器没有校验，模型仍能在容器里到处乱翻；只有校验没有容器，一个解析 bug 就直接落到宿主。<b>Docker 不可用时要明确报错，绝不退化成在宿主上直接执行。</b>
+        </Idea>
+        <h4 class="sub">数据流 · 一次 run_command 经过的关卡</h4>
+        <ol class="flow">
+          <li><span class="s">01</span><span>策略判定：<kbd>run_command</kbd> 属于 approval，<b>先暂停等人批准</b></span></li>
+          <li><span class="s">02</span><span>参数按 strict schema 校验：argv 是字符串数组，<b>长度、条数、总字节都有上限</b></span></li>
+          <li><span class="s">03</span><span>容器内再查一次：首元素在<b>允许清单</b>内，cwd 必须是 workspace 里的目录</span></li>
+          <li><span class="s">04</span><span><kbd>subprocess</kbd> 以 <b>shell=False + 独立进程组 + 最小环境变量</b>启动</span></li>
+          <li><span class="s">05</span><span>输出边读边计数，<b>超时或超量就杀掉整个进程组</b>并标记 truncated</span></li>
+        </ol>
+        <h4 class="sub">真实代码 · 镜像、启动参数与两处校验</h4>
+        <p>四个标签是同一道边界的四个侧面。镜像固定到 digest、以 uid 10001 运行；<kbd>build_argv</kbd> 里每一个开关都对应上面列的一条约束；路径校验靠逐级 <kbd>openat</kbd> 而不是字符串拼接，避免解析与打开之间被换成软链接。</p>
+        <CodeTabs variants={sandboxVariants} dir={CODE_DIR} />
+        <h4 class="sub">故障点</h4>
+        <ul class="fail">
+          <li><b>让 MCP Server 跑在宿主上</b>：那它执行的每条命令都是宿主命令，容器等于没加。</li>
+          <li><b>接受 shell 字符串</b>：只要出现管道、重定向、<kbd>&amp;&amp;</kbd>，允许清单立刻失效。argv 数组是唯一安全的形状。</li>
+          <li><b>只用 resolve() 判断路径</b>：检查与打开之间存在时间窗，软链接可以在这中间被换掉。要用 <kbd>O_NOFOLLOW</kbd> 逐级打开。</li>
+          <li><b>把 OPENAI_API_KEY 传进容器</b>：工具完全不需要它。容器 env 传空，凭据只留在宿主的模型客户端。</li>
+          <li><b>忘了输出上限</b>：一条 <kbd>cat</kbd> 大文件就能把上下文和内存一起打满。</li>
+        </ul>
+        <p class="cue"><span class="t">记忆提示</span>校验在前，容器在后；容器是第二层，不是不校验的借口。</p>
+        <Interview q="为什么工具容器要 --network none?">
+          <p>因为工具需要的一切都在挂载进来的 workspace 里，不需要网络。断网同时掐掉三类风险：把工作区内容<b>外传</b>、从外面<b>拉取</b>攻击载荷、以及通过内网地址做 <b>SSRF</b> 探测。这也是「最小权限」最容易落实的一条——先默认全关，确实需要时再单独开白名单，而不是默认联网再想办法限制。</p>
+        </Interview>
+        <Interview q="容器已经隔离了，为什么还要限制可执行程序清单?">
+          <p>容器限制的是<b>影响范围</b>，不是<b>影响内容</b>。没有清单的话，模型可以在容器里运行任意程序：翻遍挂载进来的真实工作区、改写你的源码、跑满 CPU。这些损失都发生在「合法的容器内」。允许清单把能力收敛到任务真正需要的那几个程序上，属于纵深防御里最便宜的一层。顺带一提，Docker 提供的是普通容器隔离，不是虚拟机级别的强隔离；真要跑完全不可信的代码，还需要 gVisor / Kata 这类方案。</p>
+        </Interview>
+      </section>
+
+      <!-- 06 OpenAI SDK -->
+      <section class="article" id="openai-sdk">
+        <div class="art-head"><span class="num">06</span><LcBadge kind="hard" text="实现 · OpenAI SDK" /></div>
+        <h3>纯 OpenAI SDK：手写状态机</h3>
+        <p class="lead"><b>问题</b>：不用任何 Agent 框架（也不用 OpenAI Agents SDK），只用 Responses API，一轮里到底要写多少代码？框架后面替你做的，正是这些。</p>
+        <Idea>
+          手写版把每一步都摊开：
+          <ol class="steps">
+            <li><b>发送</b>：用户输入 + function tools；后续轮次用 <kbd>previous_response_id</kbd> 接上文，而不是自己拼一份历史。</li>
+            <li><b>挑选</b>：遍历响应的 output 项，取出 <kbd>function_call</kbd>；一个都没有就是最终回答。</li>
+            <li><b>裁决</b>：每个提议先解析参数 → 校验 schema → 过策略。<b>只要有一个需要审批，整轮就停下来存档</b>，而不是先把只读的做掉。</li>
+            <li><b>执行与回填</b>：只读直接调；已批准的先记账再执行；结果按原始 call_id 顺序封成 <kbd>function_call_output</kbd> 回传。</li>
+          </ol>
+          真正花代码的地方不是「调用模型」，而是<b>去重、幂等、参数校验、错误回喂</b>这些细节。
+        </Idea>
+        <h4 class="sub">数据流 · _process_calls 的四遍扫描</h4>
+        <ol class="flow">
+          <li><span class="s">01</span><span>第一遍：解析 JSON 参数、按 schema 校验，<b>失败也不抛错</b>，记成结构化错误</span></li>
+          <li><span class="s">02</span><span>第二遍：遇到第一个未裁决的敏感调用就<b>存档返回 PendingApproval</b></span></li>
+          <li><span class="s">03</span><span>第三遍：逐个执行——被拒的回喂理由，重复 call_id 回喂 duplicate，<b>已批准的先写账本再调用</b></span></li>
+          <li><span class="s">04</span><span>第四遍：按<b>原始顺序去重</b>拼出 function_call_output 列表，回到 <kbd>_continue</kbd></span></li>
+        </ol>
+        <h4 class="sub">真实代码 · 一轮工具调用的全部裁决</h4>
+        <p>参数错误不会让进程崩溃，而是变成 <kbd>malformed_arguments</kbd> 回喂给模型让它改；被拒绝的调用把理由作为 Observation 送回去，模型可以换方案。这两条是 Agent 能「自愈」的关键。</p>
+        <CodeBlock code={openaiProcessCalls} lang="python" file="agent_core/openai_loop.py" src={src('agent_core/openai_loop.py')} />
+        <p>没有框架就得自己守住 schema：确认工具名唯一、确认声明了 strict、用 Draft 2020-12 校验一次参数。少了这段，模型传什么就执行什么。</p>
+        <CodeBlock code={openaiValidateArguments} lang="python" file="agent_core/openai_loop.py" src={src('agent_core/openai_loop.py')} />
+        <h4 class="sub">故障点</h4>
+        <ul class="fail">
+          <li><b>用顺序而不是 call_id 配对结果</b>：并行工具调用时会把结果错配到别的调用上。</li>
+          <li><b>同一轮里多个敏感调用一次性批准</b>：用户只看了第一个就点了同意。这里是逐个暂停、逐个绑定 digest。</li>
+          <li><b>工具报错就直接抛出</b>：应该回喂成结构化 Observation，让模型有机会改参数或换路径。</li>
+          <li><b>重试时不看账本</b>：同一个 call_id 再执行一次，写入就发生两次。</li>
+        </ul>
+        <p class="cue"><span class="t">记忆提示</span>一轮 = 一次模型调用 + 一批 call_id 的裁决；裁决顺序是解析、暂停、执行、回填。</p>
+        <Interview q="为什么用 previous_response_id，而不是自己维护 messages 列表?">
+          <p>让服务端持有对话状态，本地只需要记住「上一次响应的 id」和「这一轮要回填哪些 call_id」。好处是<b>恢复时要落盘的东西少得多</b>（检查点里只有 response_id 和待处理的 calls），也不会因为本地裁剪历史而把工具调用和它的结果拆散——那是最常见的一类协议错误。代价是状态在服务端，做完全离线的重放测试时要用 fake client 顶上。</p>
+        </Interview>
+        <Interview q="模型在一轮里同时要求调用三个工具，要怎么处理?">
+          <p>先<b>整体裁决再整体执行</b>。代码的做法是：一次性解析全部调用，只要其中存在未裁决的敏感调用就立刻暂停整轮；恢复后逐个执行，最后按原顺序、去重后一次性回填所有 <kbd>function_call_output</kbd>。不能「边执行边等审批」，否则用户在审批第二个调用时，第一个的副作用已经发生了。回填时顺序可以任意，但 call_id 必须对得上。</p>
+        </Interview>
+      </section>
+
+      <!-- 07 LangChain -->
+      <section class="article" id="langchain">
+        <div class="art-head"><span class="num">07</span><LcBadge kind="mid" text="实现 · LangChain" /></div>
+        <h3>LangChain：高层 Agent 与 middleware</h3>
+        <p class="lead"><b>问题</b>：上一节那几百行，框架能省掉多少？以及一个经常被答错的问题——「LangChain 版」是不是就等于「不用 LangGraph 的那一版」？</p>
+        <Idea>
+          先把最容易记混的一点说清楚：<b>LangChain 的高层 Agent 运行时本身就建立在 LangGraph 之上</b>。<kbd>create_agent</kbd> 返回的是一张已经建好的图，checkpointer 来自 <kbd>langgraph.checkpoint</kbd>，人工审批用的是 LangGraph 的 <kbd>interrupt()</kbd>，恢复用的是 <kbd>Command(resume=...)</kbd>。所以本章三版的真正区别是：
+          <ol class="steps">
+            <li><b>OpenAI SDK 版</b>：连图都没有，自己写状态机。</li>
+            <li><b>LangChain 版</b>：<b>用别人建好的图</b>，通过 middleware 往固定位置插逻辑。</li>
+            <li><b>LangGraph 版</b>：<b>自己建图</b>，节点、边、中断位置全部显式。</li>
+          </ol>
+          框架省掉的是「消息拼装、工具绑定、重试、调用计数、中断与恢复的接线」；它没有替你决定<b>什么该批准</b>，那仍然是你自己的确定性策略。
+        </Idea>
+        <h4 class="sub">数据流 · middleware 插在哪里</h4>
+        <ol class="flow">
+          <li><span class="s">01</span><span><kbd>ModelCallLimitMiddleware</kbd> 在模型调用前后计数，超限就 <b>end</b></span></li>
+          <li><span class="s">02</span><span><kbd>ToolCallLimitMiddleware</kbd> 同理约束工具调用总数</span></li>
+          <li><span class="s">03</span><span><kbd>ToolRetryMiddleware</kbd> <b>只对只读工具</b>开启重试，有副作用的一律不自动重试</span></li>
+          <li><span class="s">04</span><span>HITL middleware 在 <kbd>after_model</kbd> 拦截，<b>逐个</b>对敏感调用发起 interrupt</span></li>
+          <li><span class="s">05</span><span>批准 / 编辑 / 拒绝三种决策映射回 tool_calls，再交给工具节点</span></li>
+        </ol>
+        <h4 class="sub">真实代码 · import 段就是证据</h4>
+        <p>不需要看文档：同一个文件里既 import <kbd>langchain.agents.create_agent</kbd>，又 import <kbd>langgraph.checkpoint</kbd> 与 <kbd>langgraph.types.interrupt</kbd>。「LangChain 版不用 LangGraph」这个说法在这里直接被源码否掉。</p>
+        <CodeBlock code={langchainImports} lang="python" file="agent_core/langchain_loop.py" src={src('agent_core/langchain_loop.py')} />
+        <p>装配部分短得多：四个 middleware 加一个 <kbd>create_agent</kbd>，外加一个把 LangGraph 检查点持久化成 JSON 的 saver。和上一节的手写循环比，省下的正是那些与业务无关的接线。</p>
+        <CodeBlock code={langchainCreateAgent} lang="python" file="agent_core/langchain_loop.py" src={src('agent_core/langchain_loop.py')} />
+        <h4 class="sub">故障点</h4>
+        <ul class="fail">
+          <li><b>以为装上 HITL middleware 就安全了</b>：它负责「停下来问」，不负责「验证答复」。digest 比对、编辑后重新校验 schema，仍然要自己写。</li>
+          <li><b>用默认的内存 checkpointer</b>：进程一退出待审批的 run 就消失了，所以这里换成了原子落盘的实现。</li>
+          <li><b>一次 interrupt 批量批准多个调用</b>：默认行为容易变成「一次点头放行一批」，这里改写成逐个审批。</li>
+          <li><b>给有副作用的工具开自动重试</b>：重试会把一次写入变成两次。重试清单里只放只读工具。</li>
+        </ul>
+        <p class="cue"><span class="t">记忆提示</span>LangChain 的 Agent 就是「别人替你建好的 LangGraph 图」；省的是接线，不是判断。</p>
+        <Interview q="create_agent 和自己写 StateGraph 是什么关系?">
+          <p><kbd>create_agent</kbd> 是在 LangGraph 之上的<b>预设图 + 扩展点</b>：节点和边已经定好（调模型 → 路由 → 调工具 → 回到模型），你通过 middleware 在固定钩子（before_model / after_model / 工具包装）里插逻辑。自己写 <kbd>StateGraph</kbd> 则是连拓扑都自己定。判断标准：<b>你的流程能不能装进它预设的拓扑</b>。能装就用高层 API，省下的样板代码是实打实的；装不进（需要额外节点、并行分支、非标准的中断位置）就往下降一层。</p>
+        </Interview>
+        <Interview q="什么时候应该从 LangChain 降到 LangGraph，甚至降到裸 SDK?">
+          <p>降到 <b>LangGraph</b>：需要自定义拓扑、需要在特定节点前中断、需要精确控制状态字段与重放行为时。降到<b>裸 SDK</b>：依赖要极简（比如要进一个受限的部署环境）、需要逐字节掌控请求、或者就是想搞清楚框架到底在做什么——学习阶段这一版最值。生产上更常见的顺序是反过来：先用高层 API 跑通，遇到框架挡路的具体一点，再把那一点降下去，而不是一上来就手写。</p>
+        </Interview>
+      </section>
+
+      <!-- 08 LangGraph -->
+      <section class="article" id="langgraph">
+        <div class="art-head"><span class="num">08</span><LcBadge kind="hard" text="实现 · LangGraph" /></div>
+        <h3>LangGraph：显式状态图</h3>
+        <p class="lead"><b>问题</b>：自己建图多写了一堆代码，换来什么？答案集中在一件事上——<b>可恢复</b>：状态、检查点、中断、恢复、重放和幂等。</p>
+        <Idea>
+          把循环画成六个节点，每条边都有名字：
+          <ol class="steps">
+            <li><kbd>call_model</kbd> 调模型并计预算 → <kbd>route_response</kbd> 判断是最终回答、只读调用还是敏感调用。</li>
+            <li>敏感 → <kbd>request_approval</kbd>（内部 <kbd>interrupt()</kbd>，可能连续处理多个待审批调用）。</li>
+            <li>都裁决完 → <kbd>execute_tools</kbd> → <kbd>record_observation</kbd> → 回到 <kbd>call_model</kbd>。</li>
+            <li>结束 → <kbd>finish</kbd> → END。</li>
+          </ol>
+          必须记住的一条规则：<b>恢复时节点会从头重放</b>。所以 <kbd>interrupt()</kbd> 之前绝不能有任何副作用，工具执行靠 call_id 账本保持幂等。同理，超时预算没有放进图状态，而是放在图外的 sidecar 里——放进状态会跟着重放一起漂移。
+        </Idea>
+        <h4 class="sub">数据流 · 一次中断与恢复</h4>
+        <ol class="flow">
+          <li><span class="s">01</span><span><kbd>route_response</kbd> 发现存在 pending 的敏感调用，走条件边到 <b>request_approval</b></span></li>
+          <li><span class="s">02</span><span>节点算出 ApprovalRequest，调 <kbd>interrupt()</kbd>，<b>图在此冻结并落盘</b></span></li>
+          <li><span class="s">03</span><span>用户带着同一个 <b>thread_id</b> 与 digest 调 <kbd>Command(resume=...)</kbd></span></li>
+          <li><span class="s">04</span><span>节点<b>从头重放</b>到 interrupt 处，这次直接拿到决策继续往下</span></li>
+          <li><span class="s">05</span><span>还有未裁决的敏感调用就<b>再绕回自己</b>，全部裁决完才进 execute_tools</span></li>
+        </ol>
+        <h4 class="sub">真实代码 · 图的显式装配</h4>
+        <p>节点、条件边、以及 <kbd>compile(checkpointer=...)</kbd> 全在一屏里。三条条件边分别对应「已停机」「需要审批」「可以执行」，读代码就能读出拓扑。</p>
+        <CodeBlock code={langgraphBuildGraph} lang="python" file="agent_core/langgraph_loop.py" src={src('agent_core/langgraph_loop.py')} />
+        <p>审批节点里那句注释是这一版的核心纪律：<kbd>interrupt()</kbd> 之前只做计算，不碰任何外部目标。决策回来后先比对 digest，编辑过的参数要重新校验 schema 并重算批准。</p>
+        <CodeBlock code={langgraphRequestApproval} lang="python" file="agent_core/langgraph_loop.py" src={src('agent_core/langgraph_loop.py')} />
+        <h4 class="sub">故障点</h4>
+        <ul class="fail">
+          <li><b>副作用写在 interrupt 之前</b>：恢复重放时会再做一次。这是 LangGraph 新手最常踩的坑。</li>
+          <li><b>thread_id 不稳定</b>：每次用新 id 就找不回之前的状态，恢复变成了新开一局。</li>
+          <li><b>把预算放进图状态</b>：重放会让计数回退，超时可以被无限拉长。</li>
+          <li><b>节点里做不可重入的事</b>：追加日志、发消息、递增计数器，在重放下都会重复。</li>
+        </ul>
+        <p class="cue"><span class="t">记忆提示</span>interrupt 之前不许有副作用；恢复 = 重放 + 幂等，二者缺一不可。</p>
+        <Interview q="LangGraph 恢复时为什么会重放节点，不能从中断点精确继续吗?">
+          <p>因为中断点保存的是<b>图的状态</b>，不是 Python 的调用栈——没有协程快照可以恢复。恢复时框架会重新执行该节点的函数，让它跑到 <kbd>interrupt()</kbd> 那一行，这次直接返回你传进去的决策值。所以节点函数必须写成<b>可重入</b>的：前半段只做纯计算，副作用一律放在 interrupt 之后。这也是为什么本章的工具执行额外挂了一个 call_id 账本——万一在别处发生重放，账本能挡住第二次执行。</p>
+        </Interview>
+        <Interview q="怎么保证一次被批准的写入「只发生一次」?">
+          <p>三层叠加。第一层，<b>中断位置</b>：interrupt 之前没有副作用，正常重放不会重复。第二层，<b>执行账本</b>：调用前先把 call_id 记成 claimed，成功后记 executed；再次遇到同一个 call_id 直接回喂 duplicate 而不是重跑。第三层，<b>诚实报告</b>：如果账本记了 claimed 却没有终态（进程在这中间挂了），系统<b>不会假装它没执行过</b>，而是回喂「状态未确认，请人工核对」。分布式里做不到绝对的恰好一次，能做到的是「绝不悄悄执行第二次」。</p>
+        </Interview>
+      </section>
+
+      <!-- 09 HITL -->
+      <section class="article" id="hitl">
+        <div class="art-head"><span class="num">09</span><LcBadge kind="hard" text="安全 · HITL" /></div>
+        <h3>暂停、审批与恢复</h3>
+        <p class="lead"><b>问题</b>：「让人点一下同意」听起来很简单。但同意的到底是什么？同意之后参数被改了算不算数？拒绝之后 Agent 该干嘛？进程退出了这次同意还在不在？</p>
+        <Idea>
+          把审批当成一次<b>对具体参数的签名</b>，而不是对工具的一次性授权：
+          <ol class="steps">
+            <li><b>谁需要审批由代码决定</b>：<kbd>list_files</kbd> / <kbd>read_file</kbd> / <kbd>list_skills</kbd> / <kbd>read_skill</kbd> 自动执行；<kbd>write_file</kbd> / <kbd>run_command</kbd> 必须暂停；其余一律 deny。这段逻辑不看模型说什么。</li>
+            <li><b>审批界面要能看懂</b>：工具名、目标路径、风险等级、完整参数，写文件给内容预览，跑命令给完整 argv。</li>
+            <li><b>批准绑定 digest</b>：digest 是工具名 + call_id + 规范化参数的 SHA-256。改任何一个字节就是另一次审批。</li>
+            <li><b>拒绝也是一种输入</b>：理由作为 Observation 回给模型，它可以换方案或直接结束，而不是卡死。</li>
+            <li><b>暂停是真的退出</b>：CLI 打印 run_id 并以 <kbd>exit 3</kbd> 结束进程。恢复靠检查点，不靠内存里挂着的对象。</li>
+          </ol>
+        </Idea>
+        <h4 class="sub">数据流 · 从暂停到恢复</h4>
+        <ol class="flow">
+          <li><span class="s">01</span><span>策略把提议判成 approval，生成 <b>ApprovalRequest</b>（规范化参数 + 预览 + digest）</span></li>
+          <li><span class="s">02</span><span>写检查点 → 返回 PendingApproval → CLI 输出 run_id，<b>进程退出码 3</b></span></li>
+          <li><span class="s">03</span><span>用户 <kbd>--resume RUN_ID --approve</kbd>（或 <kbd>--reject 理由</kbd>、<kbd>--edit-json 文件</kbd>）</span></li>
+          <li><span class="s">04</span><span>恢复先<b>抢占文件锁</b>，避免两个进程同时恢复同一个 run</span></li>
+          <li><span class="s">05</span><span>比对 digest；编辑过参数则<b>重新校验 schema、重算 digest、重新绑定</b></span></li>
+          <li><span class="s">06</span><span>执行前把 call_id 写进账本，执行后回填 Observation，循环继续</span></li>
+        </ol>
+        <h4 class="sub">真实代码 · 策略与 digest</h4>
+        <p>整个授权模型就这六十行：一个只读集合、一个需审批集合、其余 deny，加上一个用<b>规范化 JSON</b>（排序键、固定分隔符、禁 NaN）算出来的稳定摘要。规范化很重要——键序不同不该被当成两次不同的审批。</p>
+        <CodeBlock code={policyFull} lang="python" file="agent_core/policy.py" src={src('agent_core/policy.py')} />
+        <h4 class="sub">真实代码 · 三版共用的 CLI 语义</h4>
+        <p>三个子命令对应三种编排方式，但参数完全一样。这是「换编排层不换操作习惯」的体现，也让三版可以跑同一套对照测试。</p>
+        <CodeBlock code={cliParser} lang="python" file="cli.py" src={src('cli.py')} />
+        <p>恢复路径的每一个 <kbd>raise</kbd> 都对应一种攻击或误用：动作不合法、digest 对不上、拒绝时还想顺手改参数。批准后参数被写回时用的是<b>重新绑定过的规范化参数</b>，不是用户原样传入的字符串。</p>
+        <CodeBlock code={openaiResume} lang="python" file="agent_core/openai_loop.py" src={src('agent_core/openai_loop.py')} />
+        <h4 class="sub">故障点</h4>
+        <ul class="fail">
+          <li><b>批准「这个工具」而不是「这次参数」</b>：等于给了模型一张后续随便填的空白支票。</li>
+          <li><b>先执行后记账</b>：执行成功但记账失败时，重放会再执行一次。必须先 claim 再执行。</li>
+          <li><b>审批界面只显示工具名</b>：用户看不到要写什么、要跑什么，点同意等于没审。</li>
+          <li><b>把参数原样打进日志</b>：参数里可能带路径、内容甚至凭据。CLI 输出前会做一次敏感字段脱敏。</li>
+          <li><b>审批疲劳</b>：什么都弹窗，用户就会一路点同意。只让真正有副作用的两个工具触发审批，是刻意的设计。</li>
+        </ul>
+        <p class="cue"><span class="t">记忆提示</span>批准的是一次参数，不是一个工具；先记账再执行，先校验再恢复。</p>
+        <Interview q="为什么批准要绑定参数哈希，而不是绑定 call_id 就够了?">
+          <p>call_id 只说明「这是同一次调用」，不说明「参数还是原来那份」。检查点是磁盘上的普通 JSON，恢复流程也可能允许用户编辑参数——只认 call_id 的话，把路径从 <kbd>notes.md</kbd> 改成别的文件，旧批准照样能用。绑定 digest 之后，任何字节级改动都会让批准失效并触发一次新的审批请求；用户主动编辑参数时，系统重新校验、重新计算、只批准编辑后的那份精确参数。</p>
+        </Interview>
+        <Interview q="用户拒绝之后，Agent 应该怎么办?">
+          <p>把<b>拒绝理由作为一条 Observation 回喂给模型</b>，然后继续循环。模型可以据此换个方案（改写别的文件、先多读一点上下文）或者直接给出「做不了，原因是……」的最终回答。三件事不能做：不能悄悄跳过这次调用当无事发生（模型会重复提议）、不能直接崩溃（用户已经投入的上下文全丢）、更不能把拒绝当成批准的变体去执行。代码里拒绝的分支明确禁止同时编辑参数——那是批准的语义，不是拒绝的。</p>
+        </Interview>
+      </section>
+
+      <!-- 10 对比 -->
+      <section class="article" id="comparison">
+        <div class="art-head"><span class="num">10</span><LcBadge kind="base" text="选型 · Comparison" /></div>
+        <h3>三版对比、常见故障与记忆卡</h3>
+        <p class="lead"><b>问题</b>：三种写法都能跑通同一个任务，真实项目里该选哪个？以及——如果只来得及记住一页，记哪一页？</p>
+        <Idea>
+          先看结论：三个入口文件<b>几乎一模一样</b>。同一个 Docker stdio transport、同一个 MCP 适配器、同一套 CLI 参数，区别只有中间那一行——换的是编排层，不是基础设施。这正是本章一开始就坚持「共享执行内核」的原因：否则你比较的其实是三套不同的安全实现。
+        </Idea>
+        <h4 class="sub">真实代码 · 三个入口的接线</h4>
+        <CodeTabs variants={orchestrationVariants} dir={CODE_DIR} />
+        <h4 class="sub">怎么选</h4>
+        <table class="cmp">
+          <thead>
+            <tr><th>维度</th><th>OpenAI SDK</th><th>LangChain</th><th>LangGraph</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>你写的是</td><td>状态机本身</td><td>装配与 middleware</td><td>节点、边与中断点</td></tr>
+            <tr><td>依赖</td><td>最少（SDK + MCP）</td><td>框架全家桶</td><td>框架全家桶</td></tr>
+            <tr><td>中断 / 恢复</td><td>自己写检查点</td><td>HITL middleware + checkpointer</td><td><kbd>interrupt()</kbd> + <kbd>Command(resume)</kbd></td></tr>
+            <tr><td>拓扑自由度</td><td>完全自由（全靠自己）</td><td>受预设图约束</td><td>完全自由（显式声明）</td></tr>
+            <tr><td>适合</td><td>学习、极简依赖、逐字节掌控</td><td>标准 ReAct 流程，快速落地</td><td>复杂流程、严格的恢复与审计</td></tr>
+            <tr><td>注意</td><td>协议细节全要自己守</td><td><b>它内部就是 LangGraph</b></td><td>重放语义必须吃透</td></tr>
+          </tbody>
+        </table>
+        <h4 class="sub">故障点 · 跨三版的速查表</h4>
+        <ul class="fail">
+          <li><b>模型 API 偶发失败</b> → 有限次指数退避；超过次数明确失败，不要静默降级。</li>
+          <li><b>MCP Server 起不来 / Docker 不可用</b> → 直接终止并给出可操作的错误，<b>绝不退化成宿主执行</b>。</li>
+          <li><b>工具参数不合法</b> → 结构化 Observation 回喂模型，让它自己改。</li>
+          <li><b>工具超时或输出过大</b> → 截断并打上标记，同时杀掉整个进程组。</li>
+          <li><b>用户拒绝</b> → 理由回喂，模型重新规划。</li>
+          <li><b>检查点缺失 / digest 不匹配</b> → 拒绝恢复，而不是「尽力而为」。</li>
+          <li><b>预算耗尽</b>（轮次 / 工具数 / 时间 / token）→ 安全终止并说明是哪一项。</li>
+        </ul>
+        <h4 class="sub">记忆卡 · 一页背完</h4>
+        <ol class="flow">
+          <li><span class="s">01</span><span>Agent = <b>带记忆的 while 循环</b>：模型提议，宿主执行，结果回喂。</span></li>
+          <li><span class="s">02</span><span>三个出口：<b>给答案、没预算、要审批</b>。</span></li>
+          <li><span class="s">03</span><span>Skill <b>目录常驻、正文按需</b>，只读且不能提权。</span></li>
+          <li><span class="s">04</span><span>MCP 的 <b>schema 是契约，annotations 只是提示</b>，授权在宿主。</span></li>
+          <li><span class="s">05</span><span>安全是两层：<b>先校验输入，再靠容器兜底</b>。</span></li>
+          <li><span class="s">06</span><span>回填靠 <b>call_id</b>，不靠顺序。</span></li>
+          <li><span class="s">07</span><span>LangChain 的 Agent <b>本来就跑在 LangGraph 上</b>。</span></li>
+          <li><span class="s">08</span><span><kbd>interrupt()</kbd> 之前<b>不许有副作用</b>。</span></li>
+          <li><span class="s">09</span><span>批准的是<b>一次参数</b>，digest 变了就要重新批。</span></li>
+          <li><span class="s">10</span><span>先<b>记账</b>再执行；状态不确定时<b>如实报告</b>，不假装没做过。</span></li>
+        </ol>
+        <Interview q="面试官问「你的 Agent 怎么防止 prompt injection」，该怎么答?">
+          <p>不要只答「我做了输入过滤」。分三层答：<b>第一，把所有外部内容当数据</b>——Skill 正文、文件内容、工具输出、MCP schema 全是不可信输入，它们只能影响模型的提议。<b>第二，授权与模型解耦</b>——是否执行由宿主的确定性策略决定，模型说破天也改不了 <kbd>write_file</kbd> 需要审批这件事。<b>第三，限制被诱导之后的损失上限</b>——断网容器、只读根、允许清单、workspace 之外不可见、预算与超时。注入无法根除，能做的是让它<b>无法转化成危险的副作用</b>。</p>
+        </Interview>
+        <Interview q="这套东西要上生产，还缺什么?">
+          <p>至少四块。<b>审批入口</b>：CLI 只适合单人，多人协作要有带身份与审计的界面。<b>可观测性</b>：每次工具调用的参数、裁决、结果、耗时要能按 run_id 串起来，且日志里不能出现凭据。<b>更强的隔离</b>：普通容器挡不住内核级逃逸，跑完全不可信的代码要上 gVisor / Kata 之类。<b>并发与配额</b>：多个 run 同时跑时的工作区隔离、镜像预热、成本上限。本章刻意把这些留在范围之外，先把「一个循环」讲清楚。</p>
+        </Interview>
+      </section>
+    </main>
+  </div>
+</BaseLayout>
+
+<style>
+  ol.flow { list-style: none; margin: 10px 0 0; padding: 0; }
+  ol.flow li { display: flex; gap: 12px; align-items: baseline; padding: 7px 0;
+    border-bottom: 1px solid var(--line); font-size: 14.5px; color: var(--graphite); }
+  ol.flow li:last-child { border-bottom: none; }
+  ol.flow .s { flex: none; font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    color: var(--accent); min-width: 22px; }
+  ol.flow b { color: var(--ink); }
+
+  ul.fail { margin: 10px 0 0; padding-left: 20px; }
+  ul.fail li { margin: 7px 0; font-size: 14.5px; color: var(--graphite); }
+  ul.fail li::marker { color: var(--red); }
+  ul.fail b { color: var(--accent-ink); }
+
+  p.cue { margin: 18px 0 0; padding-left: 13px; border-left: 2px solid var(--teal);
+    font-size: 14.5px; color: var(--graphite); }
+  p.cue .t { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.4px;
+    color: var(--teal); margin-right: 8px; }
+
+  table.cmp { width: 100%; border-collapse: collapse; margin: 14px 0 0; font-size: 14px;
+    display: block; overflow-x: auto; }
+  table.cmp th, table.cmp td { text-align: left; padding: 9px 12px;
+    border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.cmp th { font-family: var(--font-mono); font-size: 10.5px; font-weight: 600;
+    letter-spacing: 0.4px; color: var(--muted); white-space: nowrap; }
+  table.cmp td { color: var(--graphite); }
+  table.cmp td:first-child { color: var(--ink); white-space: nowrap; }
+  table.cmp tbody tr:last-child td { border-bottom: none; }
+</style>
