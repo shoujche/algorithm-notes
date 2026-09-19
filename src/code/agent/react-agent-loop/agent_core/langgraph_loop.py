@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any
 from typing_extensions import Annotated, TypedDict
@@ -23,7 +24,7 @@ from .langchain_loop import (
     SideEffectLedger,
 )
 from .mcp_adapter import validate_function_tools
-from .openai_loop import ResumeDecision
+from .openai_loop import BudgetExceeded, ResponsesRetryError, ResumeDecision
 from .policy import ToolPolicy
 
 
@@ -33,6 +34,7 @@ class GraphState(TypedDict, total=False):
     observations: list[dict[str, Any]]
     model_calls: int
     tool_calls: int
+    usage_units: int
     final_text: str
     halt: bool
 
@@ -49,16 +51,39 @@ class LangGraphReActAgent:
         policy: ToolPolicy | None = None,
         max_model_calls: int = 8,
         max_tool_calls: int = 12,
+        max_token_budget: int = 100_000,
+        max_output_chars: int = 32_768,
+        timeout_seconds: float = 120,
+        max_model_retries: int = 2,
+        retry_initial_delay: float = 0.25,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         run_id_factory: Callable[[], str] | None = None,
     ) -> None:
-        if min(max_model_calls, max_tool_calls) < 1:
+        if min(
+            max_model_calls,
+            max_tool_calls,
+            max_token_budget,
+            max_output_chars,
+        ) < 1:
             raise ValueError("call budgets must be positive")
+        if (
+            timeout_seconds <= 0
+            or max_model_retries < 0
+            or retry_initial_delay < 0
+        ):
+            raise ValueError("timeout and retry budgets are invalid")
         self._model = model
         self._mcp = mcp
         self._checkpoint_path = Path(checkpoint_path)
         self._policy = policy or ToolPolicy()
         self._max_model_calls = max_model_calls
         self._max_tool_calls = max_tool_calls
+        self._max_token_budget = max_token_budget
+        self._max_output_chars = max_output_chars
+        self._timeout_seconds = timeout_seconds
+        self._max_model_retries = max_model_retries
+        self._retry_initial_delay = retry_initial_delay
+        self._sleep = sleep
         self._run_id_factory = run_id_factory or (lambda: uuid.uuid4().hex)
         self._definitions: dict[str, dict[str, Any]] = {}
         self._bound_model: Any = None
@@ -79,11 +104,15 @@ class LangGraphReActAgent:
 
     async def start(self, user_input: str) -> RunOutcome:
         run_id = self._run_id_factory()
-        graph = await self.build_graph()
-        result = await graph.ainvoke(
-            {"messages": [{"role": "user", "content": user_input}]},
-            _config(run_id),
-        )
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                graph = await self.build_graph()
+                result = await graph.ainvoke(
+                    {"messages": [{"role": "user", "content": user_input}]},
+                    _config(run_id),
+                )
+        except TimeoutError as error:
+            raise BudgetExceeded("total timeout budget exceeded") from error
         return _to_outcome(result, run_id, self._policy)
 
     async def resume(
@@ -92,27 +121,33 @@ class LangGraphReActAgent:
         decision: ResumeDecision,
     ) -> RunOutcome:
         with self._claims.claim(run_id):
-            graph = await self.build_graph()
-            pending = await self._pending_from_graph(graph, run_id)
-            if pending is None:
-                raise ValueError("run has no pending approval")
-            _validate_resume_decision(decision, pending)
-            if decision.arguments is not None:
-                self._validate_arguments(
-                    pending.proposal.tool_name,
-                    decision.arguments,
-                )
-                edited = ToolProposal(
-                    pending.proposal.call_id,
-                    pending.proposal.tool_name,
-                    decision.arguments,
-                )
-                if self._policy.classify(edited) is not Risk.APPROVAL:
-                    raise ValueError("edited proposal is not approvable")
-            result = await graph.ainvoke(
-                Command(resume=_decision_to_dict(decision)),
-                _config(run_id),
-            )
+            try:
+                async with asyncio.timeout(self._timeout_seconds):
+                    graph = await self.build_graph()
+                    pending = await self._pending_from_graph(graph, run_id)
+                    if pending is None:
+                        raise ValueError("run has no pending approval")
+                    _validate_resume_decision(decision, pending)
+                    if decision.arguments is not None:
+                        self._validate_arguments(
+                            pending.proposal.tool_name,
+                            decision.arguments,
+                        )
+                        edited = ToolProposal(
+                            pending.proposal.call_id,
+                            pending.proposal.tool_name,
+                            decision.arguments,
+                        )
+                        if self._policy.classify(edited) is not Risk.APPROVAL:
+                            raise ValueError("edited proposal is not approvable")
+                    result = await graph.ainvoke(
+                        Command(resume=_decision_to_dict(decision)),
+                        _config(run_id),
+                    )
+            except TimeoutError as error:
+                raise BudgetExceeded(
+                    "total timeout budget exceeded"
+                ) from error
             return _to_outcome(result, run_id, self._policy)
 
     async def pending_approval(self, run_id: str) -> ApprovalRequest | None:
@@ -176,10 +211,38 @@ class LangGraphReActAgent:
                 "final_text": "model call budget exceeded",
                 "halt": True,
             }
-        response = await self._bound_model.ainvoke(state.get("messages", []))
+        last_error: Exception | None = None
+        response: AIMessage | None = None
+        for attempt in range(self._max_model_retries + 1):
+            try:
+                response = await self._bound_model.ainvoke(
+                    state.get("messages", [])
+                )
+                break
+            except Exception as error:
+                last_error = error
+                if attempt < self._max_model_retries:
+                    await self._sleep(
+                        self._retry_initial_delay * (2**attempt)
+                    )
+        if response is None:
+            attempts = self._max_model_retries + 1
+            raise ResponsesRetryError(
+                f"model call failed after {attempts} attempts"
+            ) from last_error
+        usage_units = state.get("usage_units", 0)
+        usage = response.usage_metadata
+        if usage is not None:
+            input_tokens = usage.get("input_tokens")
+            output_tokens = usage.get("output_tokens")
+            if type(input_tokens) is int and type(output_tokens) is int:
+                usage_units += input_tokens + output_tokens
+                if usage_units > self._max_token_budget:
+                    raise BudgetExceeded("model token budget exceeded")
         return {
             "messages": [response],
             "model_calls": model_calls + 1,
+            "usage_units": usage_units,
             "calls": [],
             "observations": [],
             "final_text": "",
@@ -188,7 +251,7 @@ class LangGraphReActAgent:
 
     async def _route_response(self, state: GraphState) -> dict[str, Any]:
         message = _last_ai_message(state.get("messages", []))
-        if not message.tool_calls:
+        if not message.tool_calls and not message.invalid_tool_calls:
             return {
                 "final_text": _message_text(message.content),
                 "calls": [],
@@ -197,12 +260,34 @@ class LangGraphReActAgent:
 
         seen: set[str] = set()
         calls: list[dict[str, Any]] = []
-        for raw_call in message.tool_calls:
-            call_id = _required_string(raw_call, "id")
+        for index, raw_call in enumerate(message.tool_calls):
+            raw_call_id = raw_call.get("id")
+            raw_name = raw_call.get("name")
+            call_id = (
+                raw_call_id
+                if isinstance(raw_call_id, str) and raw_call_id
+                else f"invalid-call-{index + 1}"
+            )
+            name = raw_name if isinstance(raw_name, str) and raw_name else "invalid_tool"
+            if (
+                not isinstance(raw_call_id, str)
+                or not raw_call_id
+                or not isinstance(raw_name, str)
+                or not raw_name
+            ):
+                calls.append(
+                    _errored_call(
+                        call_id,
+                        name,
+                        {},
+                        "malformed_tool_call",
+                        "call id and tool name must be non-empty strings",
+                    )
+                )
+                continue
             if call_id in seen:
                 continue
             seen.add(call_id)
-            name = _required_string(raw_call, "name")
             arguments = raw_call.get("args")
             if not isinstance(arguments, Mapping):
                 calls.append(
@@ -254,6 +339,35 @@ class LangGraphReActAgent:
                 }
             )
 
+        for index, invalid_call in enumerate(message.invalid_tool_calls):
+            raw_call_id = invalid_call.get("id")
+            raw_name = invalid_call.get("name")
+            call_id = (
+                raw_call_id
+                if isinstance(raw_call_id, str)
+                and raw_call_id
+                and raw_call_id not in seen
+                else f"invalid-call-{len(calls) + index + 1}"
+            )
+            seen.add(call_id)
+            name = (
+                raw_name
+                if isinstance(raw_name, str) and raw_name
+                else "invalid_tool"
+            )
+            calls.append(
+                _errored_call(
+                    call_id,
+                    name,
+                    {},
+                    "malformed_tool_call",
+                    str(
+                        invalid_call.get("error")
+                        or "model returned an invalid tool call"
+                    ),
+                )
+            )
+
         tool_calls = state.get("tool_calls", 0)
         if tool_calls + len(calls) > self._max_tool_calls:
             return {
@@ -301,6 +415,7 @@ class LangGraphReActAgent:
             call["rejection_reason"] = str(decision.get("reason", ""))
         else:
             edited_arguments = decision.get("arguments")
+            approved_request = approval
             if edited_arguments is not None:
                 if not isinstance(edited_arguments, Mapping):
                     raise ValueError("edited arguments must be an object")
@@ -312,8 +427,10 @@ class LangGraphReActAgent:
                 )
                 if self._policy.classify(edited) is not Risk.APPROVAL:
                     raise ValueError("edited proposal is not approvable")
+                approved_request = self._policy.approval_for(edited)
                 call["arguments"] = to_json_value(edited_arguments)
             call["approval_status"] = "approved"
+            call["approved_approval"] = _approval_to_dict(approved_request)
         calls[index] = call
         return {"calls": calls}
 
@@ -336,8 +453,33 @@ class LangGraphReActAgent:
         run_id: str,
         call: Mapping[str, Any],
     ) -> dict[str, Any]:
-        call_id = _required_string(call, "call_id")
-        name = _required_string(call, "tool_name")
+        raw_call_id = call.get("call_id")
+        raw_name = call.get("tool_name")
+        call_id = (
+            raw_call_id
+            if isinstance(raw_call_id, str) and raw_call_id
+            else "invalid-call"
+        )
+        name = (
+            raw_name
+            if isinstance(raw_name, str) and raw_name
+            else "invalid_tool"
+        )
+        if (
+            not isinstance(raw_call_id, str)
+            or not raw_call_id
+            or not isinstance(raw_name, str)
+            or not raw_name
+        ):
+            return _observation(
+                call_id,
+                name,
+                {
+                    "error": "malformed_tool_call",
+                    "detail": "call id and tool name must be non-empty strings",
+                },
+                error=True,
+            )
         arguments = call.get("arguments")
         if not isinstance(arguments, Mapping):
             return _observation(
@@ -351,6 +493,30 @@ class LangGraphReActAgent:
                 call_id,
                 name,
                 {"error": call["error"], "detail": call.get("detail", "")},
+                error=True,
+            )
+        proposal = ToolProposal(call_id, name, arguments)
+        try:
+            self._validate_arguments(name, arguments)
+        except ValueError as error:
+            return _observation(
+                call_id,
+                name,
+                {
+                    "error": "malformed_arguments",
+                    "detail": str(error),
+                },
+                error=True,
+            )
+        risk = self._policy.classify(proposal)
+        if risk is Risk.DENY:
+            return _observation(
+                call_id,
+                name,
+                {
+                    "error": "malformed_arguments",
+                    "detail": "tool has no dispatchable local policy and schema",
+                },
                 error=True,
             )
         if call.get("approval_status") == "rejected":
@@ -369,7 +535,36 @@ class LangGraphReActAgent:
                 error=True,
             )
 
-        if call.get("risk") == Risk.APPROVAL.value:
+        if risk is Risk.APPROVAL:
+            try:
+                rebound = self._policy.approval_for(proposal)
+            except ValueError as error:
+                return _observation(
+                    call_id,
+                    name,
+                    {
+                        "error": "approval_binding_invalid",
+                        "detail": str(error),
+                    },
+                    error=True,
+                )
+            stored_approval = call.get("approved_approval")
+            if (
+                call.get("approval_status") != "approved"
+                or not isinstance(stored_approval, Mapping)
+                or stored_approval.get("digest") != rebound.digest
+            ):
+                return _observation(
+                    call_id,
+                    name,
+                    {
+                        "error": "approval_binding_invalid",
+                        "detail": (
+                            "current arguments do not match the approved proposal"
+                        ),
+                    },
+                    error=True,
+                )
             claim = self._side_effects.claim(run_id, call_id)
             if claim.outcome is ClaimOutcome.FINISHED:
                 return _observation(
@@ -402,6 +597,9 @@ class LangGraphReActAgent:
                 )
             try:
                 result = await self._mcp.call(name, dict(arguments))
+                is_error, parsed_result, truncated = self._parse_mcp_result(
+                    result
+                )
             except Exception as error:
                 self._side_effects.finish(run_id, call_id, "failed")
                 return _observation(
@@ -411,6 +609,69 @@ class LangGraphReActAgent:
                         "error": "side_effect_outcome_uncertain",
                         "status": "failed",
                         "detail": str(error),
+                        "action_required": (
+                            "check the target system by hand; this call is not "
+                            "retried automatically"
+                        ),
+                    },
+                    error=True,
+                )
+            if truncated:
+                durable = self._side_effects.finish(
+                    run_id,
+                    call_id,
+                    "failed" if is_error else "executed",
+                )
+                if not durable:
+                    return _observation(
+                        call_id,
+                        name,
+                        {
+                            "error": "side_effect_status_uncertain",
+                            "status": "failed" if is_error else "executed",
+                            "detail": (
+                                "the bounded tool result was recorded but ledger "
+                                "durability is unconfirmed"
+                            ),
+                            "action_required": (
+                                "check the target system and ledger by hand; this "
+                                "call is not retried automatically"
+                            ),
+                        },
+                        error=True,
+                    )
+                return _observation(
+                    call_id,
+                    name,
+                    parsed_result,
+                    error=True,
+                )
+            if is_error:
+                if not self._side_effects.finish(run_id, call_id, "failed"):
+                    return _observation(
+                        call_id,
+                        name,
+                        {
+                            "error": "side_effect_status_uncertain",
+                            "status": "failed",
+                            "detail": (
+                                "the tool reported failure but its ledger record "
+                                "is not confirmed durable"
+                            ),
+                            "action_required": (
+                                "check the target system and ledger by hand; this "
+                                "call is not retried automatically"
+                            ),
+                        },
+                        error=True,
+                    )
+                return _observation(
+                    call_id,
+                    name,
+                    {
+                        "error": "side_effect_tool_error",
+                        "status": "failed",
+                        "content": parsed_result,
                         "action_required": (
                             "check the target system by hand; this call is not "
                             "retried automatically"
@@ -436,11 +697,17 @@ class LangGraphReActAgent:
                     },
                     error=True,
                 )
-            return _observation(call_id, name, result)
+            return _observation(call_id, name, parsed_result)
 
         try:
             result = await self._mcp.call(name, dict(arguments))
-            return _observation(call_id, name, result)
+            is_error, parsed_result, truncated = self._parse_mcp_result(result)
+            return _observation(
+                call_id,
+                name,
+                parsed_result,
+                error=is_error or truncated,
+            )
         except Exception as error:
             return _observation(
                 call_id,
@@ -467,6 +734,19 @@ class LangGraphReActAgent:
 
     async def _finish(self, state: GraphState) -> dict[str, Any]:
         return {}
+
+    def _parse_mcp_result(self, result: Any) -> tuple[bool, Any, bool]:
+        is_error, payload = _parse_mcp_result(result)
+        if len(result) <= self._max_output_chars:
+            return is_error, payload, False
+        return (
+            is_error,
+            {
+                "error": "tool_output_truncated",
+                "truncated": True,
+            },
+            True,
+        )
 
     def _validate_arguments(
         self,
@@ -663,6 +943,21 @@ def _observation(
         "content": rendered,
         "error": error,
     }
+
+
+def _parse_mcp_result(result: Any) -> tuple[bool, Any]:
+    if not isinstance(result, str):
+        raise TypeError("MCP adapter results must be JSON strings")
+    try:
+        payload = json.loads(result)
+    except json.JSONDecodeError as error:
+        raise ValueError("MCP adapter returned invalid JSON") from error
+    if not isinstance(payload, Mapping) or "is_error" not in payload:
+        return False, payload
+    is_error = payload.get("is_error")
+    if not isinstance(is_error, bool) or "content" not in payload:
+        raise ValueError("MCP adapter returned an invalid result envelope")
+    return is_error, payload
 
 
 def _to_outcome(
