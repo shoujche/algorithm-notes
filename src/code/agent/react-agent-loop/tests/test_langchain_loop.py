@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import errno
+import os
+import stat
 import subprocess
 import sys
 from collections import namedtuple
@@ -20,6 +23,7 @@ from pydantic import PrivateAttr
 from agent_core.checkpoints import contains_secret
 from agent_core.contracts import to_json_value
 from agent_core.langchain_loop import (
+    CheckpointDurabilityError,
     JsonMemorySaver,
     LangChainReActAgent,
     SideEffectLedger,
@@ -345,6 +349,133 @@ def test_put_writes_serialization_failure_preserves_memory_and_disk(
     assert after is not None
     assert after.pending_writes == []
     assert _checkpoint_ids(saver) == [checkpoint["id"]]
+    assert list(tmp_path.glob("langchain.json.*.tmp")) == []
+
+
+def _fail_chmod_on(monkeypatch, target: Path) -> None:
+    real_chmod = os.chmod
+
+    def guarded(path, mode, **kwargs) -> None:
+        if not isinstance(path, int) and Path(path) == target:
+            raise PermissionError(errno.EPERM, "injected chmod failure")
+        real_chmod(path, mode, **kwargs)
+
+    monkeypatch.setattr(os, "chmod", guarded)
+
+
+def _fail_fsync_on(monkeypatch, *, directories: bool) -> None:
+    real_fsync = os.fsync
+
+    def guarded(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode) is directories:
+            raise OSError(errno.EIO, "injected fsync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", guarded)
+
+
+def test_persisted_checkpoint_needs_no_permission_change_after_rename(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "langchain.json"
+    saver = JsonMemorySaver(path)
+    checkpoint = empty_checkpoint()
+    _fail_chmod_on(monkeypatch, path)
+
+    config = saver.put(
+        {"configurable": {"thread_id": "run-chmod", "checkpoint_ns": ""}},
+        checkpoint,
+        {},
+        {},
+    )
+    saver.put_writes(config, [("messages", {"content": "written"})], "task-1")
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    live = saver.get_tuple(config)
+    assert live is not None
+    assert [write[1] for write in live.pending_writes] == ["messages"]
+    reloaded = JsonMemorySaver(path).get_tuple(config)
+    assert reloaded is not None
+    assert [write[1] for write in reloaded.pending_writes] == ["messages"]
+    assert list(tmp_path.glob("langchain.json.*.tmp")) == []
+
+
+def test_put_directory_fsync_failure_adopts_the_persisted_checkpoint(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "langchain.json"
+    saver = JsonMemorySaver(path)
+    checkpoint = empty_checkpoint()
+    _fail_fsync_on(monkeypatch, directories=True)
+
+    with pytest.raises(CheckpointDurabilityError, match="durability uncertain"):
+        saver.put(
+            {"configurable": {"thread_id": "run-durability", "checkpoint_ns": ""}},
+            checkpoint,
+            {},
+            {},
+        )
+
+    assert _checkpoint_ids(saver) == [checkpoint["id"]]
+    assert _checkpoint_ids(JsonMemorySaver(path)) == [checkpoint["id"]]
+    assert list(tmp_path.glob("langchain.json.*.tmp")) == []
+
+
+def test_put_writes_directory_fsync_failure_adopts_the_persisted_writes(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "langchain.json"
+    saver = JsonMemorySaver(path)
+    config = saver.put(
+        {"configurable": {"thread_id": "run-durability", "checkpoint_ns": ""}},
+        empty_checkpoint(),
+        {},
+        {},
+    )
+    _fail_fsync_on(monkeypatch, directories=True)
+
+    with pytest.raises(CheckpointDurabilityError, match="durability uncertain"):
+        saver.put_writes(config, [("messages", {"content": "written"})], "task-1")
+
+    live = saver.get_tuple(config)
+    assert live is not None
+    assert [write[1] for write in live.pending_writes] == ["messages"]
+    reloaded = JsonMemorySaver(path).get_tuple(config)
+    assert reloaded is not None
+    assert [write[1] for write in reloaded.pending_writes] == ["messages"]
+    assert list(tmp_path.glob("langchain.json.*.tmp")) == []
+
+
+def test_failure_before_rename_keeps_memory_and_disk_on_the_old_checkpoint(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "langchain.json"
+    saver = JsonMemorySaver(path)
+    kept = empty_checkpoint()
+    saver.put(
+        {"configurable": {"thread_id": "run-good", "checkpoint_ns": ""}},
+        kept,
+        {},
+        {},
+    )
+    before_disk = path.read_bytes()
+    _fail_fsync_on(monkeypatch, directories=False)
+
+    with pytest.raises(OSError) as failure:
+        saver.put(
+            {"configurable": {"thread_id": "run-lost", "checkpoint_ns": ""}},
+            empty_checkpoint(),
+            {},
+            {},
+        )
+
+    assert not isinstance(failure.value, CheckpointDurabilityError)
+    assert path.read_bytes() == before_disk
+    assert _checkpoint_ids(saver) == [kept["id"]]
     assert list(tmp_path.glob("langchain.json.*.tmp")) == []
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import errno
 import fcntl
 import json
 import os
@@ -9,7 +10,7 @@ import tempfile
 import uuid
 from collections import defaultdict
 from collections.abc import Callable, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -33,6 +34,15 @@ from .contracts import ApprovalRequest, Risk, RunOutcome, ToolProposal, to_json_
 from .mcp_adapter import validate_function_tools
 from .openai_loop import ResumeDecision
 from .policy import ToolPolicy
+
+
+class CheckpointDurabilityError(OSError):
+    """The replacement landed on disk but could not be confirmed durable.
+
+    Raised only after ``os.replace`` has already committed the new file, so a
+    caller must treat the new content as the current on-disk state and must not
+    assume the previous file survived.
+    """
 
 
 class SideEffectLedger:
@@ -116,8 +126,7 @@ class JsonMemorySaver(InMemorySaver):
                 new_versions,
             )
             self._validate_candidate(candidate)
-            self._sync_unlocked(candidate)
-            self._adopt(candidate)
+            self._commit(candidate)
             return result
 
     def put_writes(self, config, writes, task_id, task_path="") -> None:
@@ -128,8 +137,7 @@ class JsonMemorySaver(InMemorySaver):
             candidate = self._copy_store()
             candidate.put_writes(config, writes, task_id, task_path)
             self._validate_candidate(candidate)
-            self._sync_unlocked(candidate)
-            self._adopt(candidate)
+            self._commit(candidate)
 
     def delete_thread(self, thread_id: str) -> None:
         with _exclusive_file_lock(self.lock_path):
@@ -231,6 +239,22 @@ class JsonMemorySaver(InMemorySaver):
             ],
         }
         _atomic_json_replace(self.path, payload)
+
+    def _commit(self, candidate: InMemorySaver) -> None:
+        """Persist ``candidate`` first, then adopt it into the live store.
+
+        Anything that fails before the rename leaves both the file and the live
+        store on the previous state. Once the rename has happened the file is
+        the new truth, so an unconfirmed durability flush still reloads and
+        adopts it rather than leaving this process disagreeing with its own
+        checkpoint file.
+        """
+        try:
+            self._sync_unlocked(candidate)
+        except CheckpointDurabilityError:
+            self._load()
+            raise
+        self._adopt(candidate)
 
     def _copy_store(self) -> InMemorySaver:
         candidate = InMemorySaver(serde=self.serde)
@@ -779,8 +803,28 @@ def _atomic_json_replace(path: Path, payload: Any) -> None:
             )
             temporary.flush()
             os.fsync(temporary.fileno())
+        # The rename is the commit point. The temporary file already carries
+        # the final 0600 mode, so no fallible step is left between it and the
+        # caller adopting the new state in memory.
         os.replace(temporary_path, path)
-        os.chmod(path, 0o600)
+        temporary_path = None
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
+    _fsync_directory(path.parent)
+
+
+def _fsync_directory(directory: Path) -> None:
+    """Flush a completed rename so it survives a crash."""
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(directory, os.O_RDONLY)
+        os.fsync(descriptor)
+    except OSError as error:
+        raise CheckpointDurabilityError(
+            errno.EIO, "checkpoint rename durability uncertain"
+        ) from error
+    finally:
+        if descriptor is not None:
+            with suppress(OSError):
+                os.close(descriptor)
