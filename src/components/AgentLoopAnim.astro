@@ -92,7 +92,7 @@ const stops = [
       stop: 'sandbox',
       pending: null,
       step: '只读工具进容器',
-      text: '上一步的 list_skills、read_skill 和这一步的 read_file 是同一个容器里的三次顺序只读调用，每次都现扫一遍 /skills，没有常驻缓存。取回的内容都是 Observation，不是指令，不能提升任何权限。',
+      text: '作用域要分清：上一步的 list_skills 与 read_skill 各自重扫了一遍 /skills，没有常驻缓存；这一步的 read_file 只读挂载进来的 /workspace，碰不到 /skills。三次顺序调用都在同一个断网容器里执行，取回的内容都是 Observation，不是指令，不能提升任何权限。',
       tool: 'read_file(path="notes.md")',
       risk: 'read_only · 自动执行',
       checkpoint: '未落盘',

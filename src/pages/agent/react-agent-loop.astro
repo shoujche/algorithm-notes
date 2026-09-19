@@ -144,7 +144,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
         <Idea>
           文件式 Skill 的核心是 <b>progressive disclosure（渐进式披露）</b>：把能力拆成三层，模型需要哪层才去取哪层。注意这里没有任何「宿主替你注入」的环节——<b>三层全都是模型主动调工具换来的</b>，初始请求里一个字的 Skill 都没有。
           <ol class="steps">
-            <li><b>目录层（一次工具调用）</b>：模型主动调 <kbd>list_skills</kbd>，才拿到每个 Skill 的 name 和 description。不调就完全不知道有 Skill 存在。</li>
+            <li><b>目录层（一次工具调用）</b>：模型主动调 <kbd>list_skills</kbd>，才拿到每个 Skill 的 name 和 description。不调就不知道有哪些 Skill——工具 schema 只告诉它「可以问」，不告诉它「有什么」。</li>
             <li><b>正文层（按需）</b>：模型从描述里判断要用某个 Skill，才调 <kbd>read_skill</kbd> 把 SKILL.md 正文当作 Observation 取回。</li>
             <li><b>资料层（再按需）</b>：Skill 里提到的具体文件，由普通文件工具去读。</li>
           </ol>
