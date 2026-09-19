@@ -1,20 +1,24 @@
 ---
 import { withBase } from '../lib/url';
 import { ghNewIssue, ghRepo } from '../lib/github';
-interface Props { active?: 'algo' | 'python' }
+import { categoryConfig, type Category } from '../data/topics';
+interface Props { active?: Category }
 const { active } = Astro.props;
 ---
 <header class="top">
   <a class="brand" href={withBase('/')}>
     <div class="logo">AN</div>
     <div>
-      <h1>算法与 Python 面试手记</h1>
-      <div class="sub">INTERVIEW NOTES · 图解算法 + Python 面试</div>
+      <h1>算法、Python 与 Agent 学习手记</h1>
+      <div class="sub">INTERVIEW NOTES · ALGORITHMS + PYTHON + AGENT</div>
     </div>
   </a>
   <nav class="mainnav">
-    <a class={active === 'algo' ? 'cur' : ''} href={withBase('/#algo')}>算法</a>
-    <a class={active === 'python' ? 'cur' : ''} href={withBase('/#python')}>Python 面试</a>
+    {categoryConfig.map((category) => (
+      <a class={active === category.key ? 'cur' : ''} href={withBase(`/#${category.key}`)}>
+        {category.label.cn}
+      </a>
+    ))}
   </nav>
   <div class="right">
     <a class="pill feedback" href={ghNewIssue('[题目反馈] ')} target="_blank" rel="noopener noreferrer" title="题目有误或想推荐更好的题？去 GitHub 提 issue">
@@ -44,6 +48,11 @@ const { active } = Astro.props;
   }
   .pill.feedback:hover { filter: brightness(1.06); }
   .pill.feedback .ic { font-size: 13px; line-height: 1; }
+  @media (max-width: 960px) {
+    .brand .sub { display: none; }
+    .mainnav a { padding-inline: 9px; }
+    .pill.feedback { display: none; }
+  }
   @media (max-width: 520px) {
     .pill.feedback .ic { margin: 0; }
   }

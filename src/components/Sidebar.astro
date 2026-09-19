@@ -1,6 +1,6 @@
 ---
 import type { Section } from '../data/topics';
-import { algoChapters, pythonChapters, categoryMeta } from '../data/topics';
+import { categoryConfig } from '../data/topics';
 import { withBase } from '../lib/url';
 
 interface Props {
@@ -10,11 +10,6 @@ interface Props {
   sections?: Section[];
 }
 const { chapterCn, chapterEn, currentSlug, sections = [] } = Astro.props;
-
-const groups = [
-  { key: 'algo' as const, list: algoChapters, hrefBase: 'topics' },
-  { key: 'python' as const, list: pythonChapters, hrefBase: 'python' },
-];
 ---
 <aside>
   <nav class="nav">
@@ -30,12 +25,12 @@ const groups = [
       ))}
     </div>
 
-    {groups.map((g) => (
+    {categoryConfig.map((g) => (
       <div class="nav-group">
-        <span class="eyebrow">{categoryMeta[g.key].cn} / {categoryMeta[g.key].en}</span>
-        {g.list.map((c) => (
+        <span class="eyebrow">{g.label.cn} / {g.label.en}</span>
+        {g.chapters.map((c) => (
           c.ready ? (
-            <a href={withBase(`/${g.hrefBase}/${c.slug}`)} class={c.slug === currentSlug ? 'chapter-cur' : ''}>
+            <a href={withBase(`${g.routePrefix}/${c.slug}`)} class={c.slug === currentSlug ? 'chapter-cur' : ''}>
               <span class="idx">{c.num}</span>{c.cn}
             </a>
           ) : (

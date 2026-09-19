@@ -1,34 +1,30 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
-import { chapters, algoChapters, pythonChapters, categoryMeta } from '../data/topics';
+import { agentChapters, algoChapters, categoryConfig, pythonChapters } from '../data/topics';
 import { withBase } from '../lib/url';
-
-const groups = [
-  { key: 'algo' as const, list: algoChapters, hrefBase: 'topics' },
-  { key: 'python' as const, list: pythonChapters, hrefBase: 'python' },
-];
 ---
-<BaseLayout title="算法与 Python 面试手记 Interview Notes · 图解数据结构与算法 + Python 面试">
+<BaseLayout title="算法、Python 与 Agent 学习手记 · Interview Notes">
   <div class="home-wrap">
     <div class="hero">
-      <span class="eyebrow">算法与 Python 面试手记 · Interview Notes</span>
-      <h2>图解<em>数据结构</em>与算法 · <em>Python</em> 面试</h2>
-      <p>从零开始记录数据结构与算法的学习，用分步动画拆解经典 LeetCode 题；并汇总 Python 语言、并发/GIL、asyncio、FastAPI 与 Agent 工程的面试知识。既是我的学习手记，也希望帮到同样在准备的你。</p>
+      <span class="eyebrow">算法、Python 与 Agent 学习手记 · Interview Notes</span>
+      <h2>图解<em>算法</em> · 深入 <em>Python</em> · 构建 <em>Agent</em></h2>
+      <p>从零记录数据结构与算法、Python 工程和 Agent 系统的学习：用分步动画拆解经典题目，也梳理语言机制、并发、工具调用、沙盒与审批流程。</p>
       <div class="meta">
         <div><span class="n">{algoChapters.length}</span><span class="l">Algorithms</span></div>
         <div><span class="n">{pythonChapters.length}</span><span class="l">Python</span></div>
+        <div><span class="n">{agentChapters.length}</span><span class="l">Agent</span></div>
         <div><span class="n">动画</span><span class="l">Visual</span></div>
         <div><span class="n">开源</span><span class="l">Open Source</span></div>
       </div>
     </div>
 
-    {groups.map((g) => (
+    {categoryConfig.map((g) => (
       <section id={g.key} class="cat-block">
-        <h4 class="sub">{categoryMeta[g.key].cn} · {categoryMeta[g.key].en}</h4>
+        <h4 class="sub">{g.label.cn} · {g.label.en}</h4>
         <div class="topic-grid">
-          {g.list.map((c) => (
+          {g.chapters.map((c) => (
             c.ready ? (
-              <a class="topic-card" href={withBase(`/${g.hrefBase}/${c.slug}`)}>
+              <a class="topic-card" href={withBase(`${g.routePrefix}/${c.slug}`)}>
                 <span class="tnum">CH.{c.num}</span>
                 <h3>{c.cn}</h3>
                 <span class="ten">{c.en}</span>

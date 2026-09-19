@@ -2,7 +2,8 @@
 
 export type Difficulty = 'base' | 'easy' | 'mid' | 'hard';
 
-export type Category = 'algo' | 'python';
+export const categoryKeys = ['algo', 'python', 'agent'] as const;
+export type Category = (typeof categoryKeys)[number];
 
 export interface Section {
   id: string;        // 页内锚点 id
@@ -12,8 +13,8 @@ export interface Section {
 }
 
 export interface Chapter {
-  slug: string;      // 路由：/topics/<slug>（algo）或 /python/<slug>（python）
-  category: Category; // 归属板块：算法 / Python
+  slug: string;      // 路由由 categoryConfig 中的 routePrefix 统一决定
+  category: Category; // 归属板块：算法 / Python / Agent
   num: string;       // 章节序号
   cn: string;        // 中文名
   en: string;        // 英文名
@@ -134,6 +135,29 @@ export const chapters: Chapter[] = [
       { id: 'tool-loop', num: '05', label: '简易 tool-calling loop' },
     ],
   },
+
+  // ===== Agent 板块 =====
+  {
+    slug: 'react-agent-loop',
+    category: 'agent',
+    num: 'A01',
+    cn: 'ReAct Agent 循环',
+    en: 'ReAct Agent Loop',
+    summary: '从最小循环到 Skills、MCP、Docker 沙盒与 Human-in-the-loop，对比三种 Agent 编排方式。',
+    ready: false,
+    sections: [
+      { id: 'mental-model', num: '01', label: 'ReAct 最小心智模型' },
+      { id: 'state', num: '02', label: '状态与退出条件' },
+      { id: 'skills', num: '03', label: 'Skills 渐进式披露' },
+      { id: 'mcp', num: '04', label: 'MCP 工具调用' },
+      { id: 'sandbox', num: '05', label: 'Docker 信任边界' },
+      { id: 'openai-sdk', num: '06', label: 'OpenAI SDK 手写循环' },
+      { id: 'langchain', num: '07', label: 'LangChain Agent' },
+      { id: 'langgraph', num: '08', label: 'LangGraph 状态图' },
+      { id: 'hitl', num: '09', label: '暂停、审批与恢复' },
+      { id: 'comparison', num: '10', label: '三版对比与选型' },
+    ],
+  },
 ];
 
 export const readyChapters = chapters.filter((c) => c.ready);
@@ -142,8 +166,33 @@ export const soonChapters = chapters.filter((c) => !c.ready);
 // 按板块派生
 export const algoChapters = chapters.filter((c) => c.category === 'algo');
 export const pythonChapters = chapters.filter((c) => c.category === 'python');
+export const agentChapters = chapters.filter((c) => c.category === 'agent');
 
-export const categoryMeta: Record<Category, { cn: string; en: string }> = {
-  algo: { cn: '算法', en: 'Algorithms' },
-  python: { cn: 'Python', en: 'Python' },
-};
+interface CategoryConfig {
+  key: Category;
+  label: { cn: string; en: string };
+  routePrefix: `/${string}`;
+  chapters: Chapter[];
+}
+
+// 分类展示名、路由前缀与章节派生集中在一处，首页、顶部导航和侧栏共同复用。
+export const categoryConfig: CategoryConfig[] = [
+  {
+    key: 'algo',
+    label: { cn: '算法', en: 'Algorithms' },
+    routePrefix: '/topics',
+    chapters: algoChapters,
+  },
+  {
+    key: 'python',
+    label: { cn: 'Python', en: 'Python' },
+    routePrefix: '/python',
+    chapters: pythonChapters,
+  },
+  {
+    key: 'agent',
+    label: { cn: 'Agent', en: 'Agent' },
+    routePrefix: '/agent',
+    chapters: agentChapters,
+  },
+];

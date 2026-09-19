@@ -1,13 +1,14 @@
 ---
 import '../styles/global.css';
 import SiteHeader from '../components/SiteHeader.astro';
+import type { Category } from '../data/topics';
 
 interface Props {
   title: string;
   description?: string;
-  active?: 'algo' | 'python';
+  active?: Category;
 }
-const { title, description = '算法与 Python 面试手记 Interview Notes — 图解数据结构与算法，带分步动画的 LeetCode 题解', active } = Astro.props;
+const { title, description = '算法、Python 与 Agent 学习手记 — 图解数据结构与算法，深入 Python 工程与 Agent 系统', active } = Astro.props;
 ---
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -25,8 +26,8 @@ const { title, description = '算法与 Python 面试手记 Interview Notes — 
   <SiteHeader active={active} />
   <slot />
   <footer>
-    <span>算法与 Python 面试手记 Interview Notes</span>
-    <span class="mono">图解数据结构与算法 · Built with Astro</span>
+    <span>算法、Python 与 Agent 学习手记</span>
+    <span class="mono">Algorithms · Python · Agent · Built with Astro</span>
   </footer>
 </body>
 </html>
