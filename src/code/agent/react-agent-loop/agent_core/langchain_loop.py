@@ -11,6 +11,8 @@ import uuid
 from collections import defaultdict
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -45,27 +47,69 @@ class CheckpointDurabilityError(OSError):
     """
 
 
+class ClaimOutcome(Enum):
+    """What a caller is allowed to conclude from a claim attempt.
+
+    A side-effect call moves from missing to ``claimed`` and only then to a
+    terminal status. ``claimed`` alone never proves the effect ran, so the only
+    outcome that may be described to the model as already executed is
+    ``FINISHED``.
+    """
+
+    GRANTED = "granted"
+    UNCONFIRMED = "unconfirmed"
+    FINISHED = "finished"
+
+
+@dataclass(frozen=True)
+class SideEffectClaim:
+    outcome: ClaimOutcome
+    status: str
+
+
 class SideEffectLedger:
     """Persist side-effect claims so replay cannot dispatch a call twice."""
 
-    _STATUSES = frozenset({"claimed", "executed", "failed"})
+    _TERMINAL_STATUSES = frozenset({"executed", "failed"})
+    _STATUSES = frozenset({"claimed"}) | _TERMINAL_STATUSES
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.lock_path = self.path.with_name(f"{self.path.name}.lock")
 
-    def claim(self, run_id: str, tool_call_id: str) -> bool:
+    def claim(self, run_id: str, tool_call_id: str) -> SideEffectClaim:
+        """Reserve a side-effect call, reporting whether it may be dispatched.
+
+        ``GRANTED`` is returned only for a fresh claim whose record is
+        confirmed durable. Every other path leaves a ``claimed`` record whose
+        execution nobody can vouch for: the durability flush after the rename
+        may have failed here, an earlier process may have died between the
+        claim and the dispatch, or a replay may be re-entering a call whose
+        outcome was never recorded.
+        """
         with _exclusive_file_lock(self.lock_path):
             data = self._load()
             calls = data.setdefault(run_id, {})
-            if tool_call_id in calls:
-                return False
+            existing = calls.get(tool_call_id)
+            if existing in self._TERMINAL_STATUSES:
+                return SideEffectClaim(ClaimOutcome.FINISHED, existing)
+            if existing == "claimed":
+                return SideEffectClaim(ClaimOutcome.UNCONFIRMED, existing)
             calls[tool_call_id] = "claimed"
-            _atomic_json_replace(self.path, data)
-            return True
+            try:
+                _atomic_json_replace(self.path, data)
+            except CheckpointDurabilityError:
+                return SideEffectClaim(ClaimOutcome.UNCONFIRMED, "claimed")
+            return SideEffectClaim(ClaimOutcome.GRANTED, "claimed")
 
-    def finish(self, run_id: str, tool_call_id: str, status: str) -> None:
-        if status not in {"executed", "failed"}:
+    def finish(self, run_id: str, tool_call_id: str, status: str) -> bool:
+        """Record a terminal status, returning whether it is confirmed durable.
+
+        A ``False`` return means the record is already on disk but its flush
+        could not be confirmed. The side effect has happened either way, so the
+        record is kept rather than rolled back.
+        """
+        if status not in self._TERMINAL_STATUSES:
             raise ValueError("side-effect result must be executed or failed")
         with _exclusive_file_lock(self.lock_path):
             data = self._load()
@@ -73,7 +117,11 @@ class SideEffectLedger:
             if calls.get(tool_call_id) != "claimed":
                 raise ValueError("side-effect call has no active claim")
             calls[tool_call_id] = status
-            _atomic_json_replace(self.path, data)
+            try:
+                _atomic_json_replace(self.path, data)
+            except CheckpointDurabilityError:
+                return False
+            return True
 
     def status(self, run_id: str, tool_call_id: str) -> str | None:
         with _exclusive_file_lock(self.lock_path):
@@ -551,31 +599,53 @@ class LangChainReActAgent:
                     "thread_id",
                 )
                 tool_call_id = runtime.tool_call_id
-                if not self._side_effects.claim(run_id, tool_call_id):
-                    return json.dumps(
-                        {
-                            "error": "duplicate_side_effect_call",
-                            "status": self._side_effects.status(
-                                run_id,
-                                tool_call_id,
-                            ),
-                        },
-                        sort_keys=True,
-                        separators=(",", ":"),
+                claim = self._side_effects.claim(run_id, tool_call_id)
+                if claim.outcome is ClaimOutcome.FINISHED:
+                    return _observation(
+                        error="duplicate_side_effect_call",
+                        status=claim.status,
+                        detail="this call already finished and is not repeated",
+                    )
+                if claim.outcome is ClaimOutcome.UNCONFIRMED:
+                    return _observation(
+                        error="side_effect_status_uncertain",
+                        status=claim.status,
+                        detail=(
+                            "the call is claimed but never finished, so "
+                            "whether the side effect ran is unconfirmed"
+                        ),
+                        action_required=(
+                            "check the target system by hand and reconcile "
+                            "the ledger; this call is never dispatched again "
+                            "automatically"
+                        ),
                     )
                 try:
                     result = await self._mcp.call(_tool_name, arguments)
                 except Exception as error:
                     self._side_effects.finish(run_id, tool_call_id, "failed")
-                    return json.dumps(
-                        {
-                            "error": "side_effect_outcome_uncertain",
-                            "detail": str(error),
-                        },
-                        sort_keys=True,
-                        separators=(",", ":"),
+                    return _observation(
+                        error="side_effect_outcome_uncertain",
+                        status="failed",
+                        detail=str(error),
+                        action_required=(
+                            "check the target system by hand; this call is "
+                            "not retried automatically"
+                        ),
                     )
-                self._side_effects.finish(run_id, tool_call_id, "executed")
+                if not self._side_effects.finish(run_id, tool_call_id, "executed"):
+                    return _observation(
+                        error="side_effect_status_uncertain",
+                        status="executed",
+                        detail=(
+                            "the side effect ran but its finished ledger "
+                            "record is not confirmed durable"
+                        ),
+                        action_required=(
+                            "check the ledger by hand; this call is not "
+                            "retried automatically"
+                        ),
+                    )
                 return result
 
             tools.append(
@@ -665,6 +735,10 @@ class LangChainReActAgent:
 
 def _config(run_id: str) -> dict[str, dict[str, str]]:
     return {"configurable": {"thread_id": run_id}}
+
+
+def _observation(**fields: str) -> str:
+    return json.dumps(fields, sort_keys=True, separators=(",", ":"))
 
 
 def _to_outcome(

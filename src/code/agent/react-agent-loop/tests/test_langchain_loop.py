@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import json
 import os
 import stat
 import subprocess
@@ -20,10 +21,12 @@ from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.types import Command, Send
 from pydantic import PrivateAttr
 
+from agent_core import langchain_loop
 from agent_core.checkpoints import contains_secret
 from agent_core.contracts import to_json_value
 from agent_core.langchain_loop import (
     CheckpointDurabilityError,
+    ClaimOutcome,
     JsonMemorySaver,
     LangChainReActAgent,
     SideEffectLedger,
@@ -374,6 +377,30 @@ def _fail_fsync_on(monkeypatch, *, directories: bool) -> None:
     monkeypatch.setattr(os, "fsync", guarded)
 
 
+def _fail_durability_flush_for(monkeypatch, target: Path, *, skip: int = 0) -> None:
+    """Report writes to ``target`` as committed but not confirmed durable.
+
+    Directory fsync failures cannot be aimed at a single file, because the
+    ledger and the checkpoint share one directory. This reproduces the same
+    post-rename state for one file: the new content is on disk and the caller
+    is told the flush could not be confirmed.
+    """
+    real_replace = langchain_loop._atomic_json_replace
+    remaining = skip
+
+    def guarded(path: Path, payload: Any) -> None:
+        nonlocal remaining
+        real_replace(path, payload)
+        if Path(path) != target:
+            return
+        if remaining > 0:
+            remaining -= 1
+            return
+        raise CheckpointDurabilityError(errno.EIO, "injected durability failure")
+
+    monkeypatch.setattr(langchain_loop, "_atomic_json_replace", guarded)
+
+
 def test_persisted_checkpoint_needs_no_permission_change_after_rename(
     tmp_path,
     monkeypatch,
@@ -593,7 +620,7 @@ ledger, ready, barrier = map(Path, sys.argv[1:])
 ready.write_text("ready", encoding="utf-8")
 while not barrier.exists():
     time.sleep(0.01)
-print(SideEffectLedger(ledger).claim("run-1", "call-write"), flush=True)
+print(SideEffectLedger(ledger).claim("run-1", "call-write").outcome.value, flush=True)
 """
     processes: list[tuple[subprocess.Popen[str], Path]] = []
     for index in range(2):
@@ -624,8 +651,53 @@ print(SideEffectLedger(ledger).claim("run-1", "call-write"), flush=True)
         assert process.returncode == 0
         results.append(stdout.strip())
 
-    assert sorted(results) == ["False", "True"]
+    assert sorted(results) == ["granted", "unconfirmed"]
     assert SideEffectLedger(ledger_path).status("run-1", "call-write") == "claimed"
+
+
+def test_claim_after_a_durability_failure_stays_unconfirmed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    ledger = SideEffectLedger(tmp_path / "side-effects.json")
+    _fail_fsync_on(monkeypatch, directories=True)
+
+    claim = ledger.claim("run-1", "call-write")
+
+    assert claim.outcome is ClaimOutcome.UNCONFIRMED
+    assert claim.status == "claimed"
+    assert ledger.status("run-1", "call-write") == "claimed"
+
+
+def test_only_a_finished_call_is_reported_as_a_duplicate(tmp_path) -> None:
+    ledger = SideEffectLedger(tmp_path / "side-effects.json")
+
+    first = ledger.claim("run-1", "call-write")
+    before_finish = ledger.claim("run-1", "call-write")
+    durable = ledger.finish("run-1", "call-write", "executed")
+    after_finish = ledger.claim("run-1", "call-write")
+
+    assert first.outcome is ClaimOutcome.GRANTED
+    assert before_finish.outcome is ClaimOutcome.UNCONFIRMED
+    assert before_finish.status == "claimed"
+    assert durable is True
+    assert after_finish.outcome is ClaimOutcome.FINISHED
+    assert after_finish.status == "executed"
+
+
+def test_finish_reports_an_unconfirmed_but_preserved_terminal_record(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    ledger = SideEffectLedger(tmp_path / "side-effects.json")
+    assert ledger.claim("run-1", "call-write").outcome is ClaimOutcome.GRANTED
+    _fail_fsync_on(monkeypatch, directories=True)
+
+    durable = ledger.finish("run-1", "call-write", "executed")
+
+    assert durable is False
+    assert ledger.status("run-1", "call-write") == "executed"
+    assert ledger.claim("run-1", "call-write").outcome is ClaimOutcome.FINISHED
 
 
 @pytest.mark.asyncio
@@ -670,8 +742,9 @@ async def test_runtime_call_id_is_claimed_before_dispatch_and_blocks_replay(
     ) == "executed"
 
     checkpoint_path.write_bytes(pending_checkpoint)
+    replay_model = FakeChatModel([AIMessage(content="replay handled")])
     replay_agent = LangChainReActAgent(
-        model=FakeChatModel([AIMessage(content="replay handled")]),
+        model=replay_model,
         mcp=mcp,
         checkpoint_path=checkpoint_path,
     )
@@ -682,6 +755,102 @@ async def test_runtime_call_id_is_claimed_before_dispatch_and_blocks_replay(
     assert mcp.calls == [
         ("write_file", {"path": "b.py", "content": "new"})
     ]
+    observation = json.loads(str(replay_model.seen_messages[-1][-1].content))
+    assert observation["error"] == "duplicate_side_effect_call"
+    assert observation["status"] == "executed"
+
+
+@pytest.mark.asyncio
+async def test_claim_durability_failure_never_dispatches_or_claims_a_duplicate(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    checkpoint_path = tmp_path / "langchain.json"
+    ledger_path = tmp_path / "langchain.json.side-effects.json"
+    mcp = FakeLangChainMCP()
+    model = FakeChatModel(
+        [
+            tool_call("call-write", "write_file", {"path": "b.py", "content": "new"}),
+            AIMessage(content="reported uncertain"),
+        ]
+    )
+    agent = LangChainReActAgent(
+        model=model,
+        mcp=mcp,
+        checkpoint_path=checkpoint_path,
+        run_id_factory=lambda: "run-1",
+    )
+    pending = await agent.start("change")
+    pending_checkpoint = checkpoint_path.read_bytes()
+    decision = ResumeDecision(
+        action="approve",
+        digest=pending.pending_approval.digest,
+    )
+    _fail_durability_flush_for(monkeypatch, ledger_path)
+
+    outcome = await agent.resume("run-1", decision)
+
+    assert outcome.final_text == "reported uncertain"
+    assert mcp.calls == []
+    first = json.loads(str(model.seen_messages[-1][-1].content))
+    assert first["error"] == "side_effect_status_uncertain"
+    assert first["status"] == "claimed"
+    assert "unconfirmed" in first["detail"]
+    assert "by hand" in first["action_required"]
+    assert SideEffectLedger(ledger_path).status("run-1", "call-write") == "claimed"
+
+    monkeypatch.undo()
+    checkpoint_path.write_bytes(pending_checkpoint)
+    replay_model = FakeChatModel([AIMessage(content="replay handled")])
+    replay_agent = LangChainReActAgent(
+        model=replay_model,
+        mcp=mcp,
+        checkpoint_path=checkpoint_path,
+    )
+
+    replay = await replay_agent.resume("run-1", decision)
+
+    assert replay.final_text == "replay handled"
+    assert mcp.calls == []
+    assert json.loads(str(replay_model.seen_messages[-1][-1].content)) == first
+    assert SideEffectLedger(ledger_path).status("run-1", "call-write") == "claimed"
+
+
+@pytest.mark.asyncio
+async def test_finish_durability_failure_reports_uncertainty_without_retry(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    checkpoint_path = tmp_path / "langchain.json"
+    ledger_path = tmp_path / "langchain.json.side-effects.json"
+    mcp = FakeLangChainMCP()
+    model = FakeChatModel(
+        [
+            tool_call("call-write", "write_file", {"path": "b.py", "content": "new"}),
+            AIMessage(content="reported uncertain"),
+        ]
+    )
+    agent = LangChainReActAgent(
+        model=model,
+        mcp=mcp,
+        checkpoint_path=checkpoint_path,
+        run_id_factory=lambda: "run-1",
+    )
+    pending = await agent.start("change")
+    _fail_durability_flush_for(monkeypatch, ledger_path, skip=1)
+
+    outcome = await agent.resume(
+        "run-1",
+        ResumeDecision(action="approve", digest=pending.pending_approval.digest),
+    )
+
+    assert outcome.final_text == "reported uncertain"
+    assert mcp.calls == [("write_file", {"path": "b.py", "content": "new"})]
+    observation = json.loads(str(model.seen_messages[-1][-1].content))
+    assert observation["error"] == "side_effect_status_uncertain"
+    assert observation["status"] == "executed"
+    assert "not retried" in observation["action_required"]
+    assert SideEffectLedger(ledger_path).status("run-1", "call-write") == "executed"
 
 
 def test_subprocess_reads_persisted_checkpoint(tmp_path) -> None:
