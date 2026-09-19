@@ -273,6 +273,8 @@ def main(argv: list[str] | None = None) -> int:
                 sort_keys=True,
                 allow_nan=False,
             )
+        except asyncio.CancelledError:
+            raise SafeCliError("operation cancelled") from None
         except Exception as error:
             raise _implementation_error(error) from error
     except SafeCliError as error:

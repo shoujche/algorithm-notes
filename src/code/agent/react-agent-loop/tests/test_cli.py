@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 import sys
@@ -22,11 +23,21 @@ class RecordingRunner:
 
 
 class RaisingRunner:
-    def __init__(self, error: Exception) -> None:
+    def __init__(self, error: BaseException) -> None:
         self.error = error
 
     async def __call__(self, command: str, args: object) -> RunOutcome:
         raise self.error
+
+
+class CancellingRunner:
+    async def __call__(self, command: str, args: object) -> RunOutcome:
+        try:
+            raise RuntimeError("cause-sentinel-do-not-echo")
+        except RuntimeError as cause:
+            raise asyncio.CancelledError(
+                "cancel-sentinel-do-not-echo"
+            ) from cause
 
 
 class SyntheticSchemaError(ValueError):
@@ -37,6 +48,17 @@ class ExplodingOutcome:
     @property
     def pending_approval(self) -> object:
         raise ValueError("render sentinel-do-not-echo")
+
+
+class CancelledRenderingOutcome:
+    @property
+    def pending_approval(self) -> object:
+        try:
+            raise RuntimeError("render-cause-sentinel-do-not-echo")
+        except RuntimeError as cause:
+            raise asyncio.CancelledError(
+                "render-cancel-sentinel-do-not-echo"
+            ) from cause
 
 
 def invoke(
@@ -362,6 +384,85 @@ def test_rendering_errors_are_also_sanitized(
     assert output == ""
     assert error.strip() == "error: implementation failed: validation rejected"
     assert "sentinel-do-not-echo" not in error
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        None,
+        CancelledRenderingOutcome(),
+    ],
+    ids=["entrypoint", "rendering"],
+)
+def test_cancellation_suppresses_secret_exception_chain(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    outcome: object | None,
+) -> None:
+    if outcome is None:
+        runner: object = CancellingRunner()
+    else:
+        runner = RecordingRunner(outcome)  # type: ignore[arg-type]
+
+    workspace = tmp_path / "workspace"
+    skills = tmp_path / "skills"
+    workspace.mkdir()
+    skills.mkdir()
+    monkeypatch.setattr(cli, "_run_entrypoint", runner)
+    monkeypatch.setattr(cli.shutil, "which", lambda _: "/usr/bin/docker")
+    monkeypatch.setenv("OPENAI_API_KEY", "present-only-for-test")
+
+    code = cli.main(
+        [
+            "openai",
+            "answer",
+            "--workspace",
+            str(workspace),
+            "--skills",
+            str(skills),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert code != 0
+    assert captured.out == ""
+    assert captured.err.strip() == "error: operation cancelled"
+    assert "sentinel-do-not-echo" not in captured.err
+    assert "cause" not in captured.err
+    assert "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize("interrupt", [KeyboardInterrupt(), SystemExit(7)])
+def test_process_control_exceptions_still_propagate(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    interrupt: BaseException,
+) -> None:
+    workspace = tmp_path / "workspace"
+    skills = tmp_path / "skills"
+    workspace.mkdir()
+    skills.mkdir()
+    monkeypatch.setattr(cli, "_run_entrypoint", RaisingRunner(interrupt))
+    monkeypatch.setattr(cli.shutil, "which", lambda _: "/usr/bin/docker")
+    monkeypatch.setenv("OPENAI_API_KEY", "present-only-for-test")
+
+    with pytest.raises(type(interrupt)):
+        cli.main(
+            [
+                "openai",
+                "answer",
+                "--workspace",
+                str(workspace),
+                "--skills",
+                str(skills),
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
 
 
 def test_import_cli_does_not_load_runtime_frameworks() -> None:
