@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
@@ -23,6 +24,8 @@ from .langchain_loop import (
     ClaimOutcome,
     JsonMemorySaver,
     SideEffectLedger,
+    _atomic_json_replace,
+    _exclusive_file_lock,
 )
 from .mcp_adapter import validate_function_tools
 from .openai_loop import BudgetExceeded, ResponsesRetryError, ResumeDecision
@@ -39,6 +42,46 @@ class GraphState(TypedDict, total=False):
     remaining_timeout_seconds: float
     final_text: str
     halt: bool
+
+
+class ActiveBudgetStore:
+    """Permission-restricted sidecar for budget updates before a graph exists."""
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        self.lock_path = self.path.with_name(f"{self.path.name}.lock")
+
+    def initialize(self, run_id: str, remaining: float) -> None:
+        with _exclusive_file_lock(self.lock_path):
+            data = self._load()
+            if run_id in data:
+                raise ValueError(f"run {run_id!r} already has a timeout budget")
+            data[run_id] = _valid_remaining(remaining)
+            _atomic_json_replace(self.path, data)
+
+    def load(self, run_id: str) -> float | None:
+        with _exclusive_file_lock(self.lock_path):
+            return self._load().get(run_id)
+
+    def save(self, run_id: str, remaining: float) -> None:
+        with _exclusive_file_lock(self.lock_path):
+            data = self._load()
+            if run_id not in data:
+                raise ValueError(f"run {run_id!r} has no timeout budget")
+            data[run_id] = _valid_remaining(remaining)
+            _atomic_json_replace(self.path, data)
+
+    def _load(self) -> dict[str, float]:
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        if not isinstance(raw, Mapping):
+            raise ValueError("invalid active budget sidecar")
+        return {
+            str(run_id): _valid_remaining(remaining)
+            for run_id, remaining in raw.items()
+        }
 
 
 class LangGraphReActAgent:
@@ -101,22 +144,38 @@ class LangGraphReActAgent:
                 f"{self._checkpoint_path.name}.side-effects.json"
             )
         )
+        self._budgets = ActiveBudgetStore(
+            self._checkpoint_path.with_name(
+                f"{self._checkpoint_path.name}.active-budgets.json"
+            )
+        )
 
     @property
     def side_effect_ledger(self) -> SideEffectLedger:
         return self._side_effects
 
     async def start(self, user_input: str) -> RunOutcome:
+        started = self._monotonic()
         run_id = self._run_id_factory()
-        graph = await self.build_graph()
-        result = await self._invoke_with_timeout_budget(
-            graph,
+        self._budgets.initialize(run_id, self._timeout_seconds)
+        graph_ref: list[Any | None] = [None]
+
+        async def invoke() -> Mapping[str, Any]:
+            graph_ref[0] = await self.build_graph()
+            return await graph_ref[0].ainvoke(
+                {
+                    "messages": [{"role": "user", "content": user_input}],
+                    "remaining_timeout_seconds": self._timeout_seconds,
+                },
+                _config(run_id),
+            )
+
+        result = await self._run_active_interval(
             run_id,
-            {
-                "messages": [{"role": "user", "content": user_input}],
-                "remaining_timeout_seconds": self._timeout_seconds,
-            },
             self._timeout_seconds,
+            started,
+            invoke,
+            graph_ref,
         )
         return _to_outcome(result, run_id, self._policy)
 
@@ -125,33 +184,45 @@ class LangGraphReActAgent:
         run_id: str,
         decision: ResumeDecision,
     ) -> RunOutcome:
+        started = self._monotonic()
         with self._claims.claim(run_id):
-            graph = await self.build_graph()
-            snapshot = await graph.aget_state(_config(run_id))
-            remaining = _remaining_timeout(snapshot)
+            remaining = self._budgets.load(run_id)
+            if remaining is None:
+                raise ValueError("run has no persisted timeout budget")
             if remaining <= 0:
                 raise BudgetExceeded("total timeout budget exceeded")
-            pending = _pending_from_snapshot(snapshot, self._policy)
-            if pending is None:
-                raise ValueError("run has no pending approval")
-            _validate_resume_decision(decision, pending)
-            if decision.arguments is not None:
-                self._validate_arguments(
-                    pending.proposal.tool_name,
-                    decision.arguments,
+            graph_ref: list[Any | None] = [None]
+
+            async def invoke() -> Mapping[str, Any]:
+                graph_ref[0] = await self.build_graph()
+                snapshot = await graph_ref[0].aget_state(_config(run_id))
+                pending = _pending_from_snapshot(snapshot, self._policy)
+                if pending is None:
+                    raise ValueError("run has no pending approval")
+                _validate_resume_decision(decision, pending)
+                if decision.arguments is not None:
+                    self._validate_arguments(
+                        pending.proposal.tool_name,
+                        decision.arguments,
+                    )
+                    edited = ToolProposal(
+                        pending.proposal.call_id,
+                        pending.proposal.tool_name,
+                        decision.arguments,
+                    )
+                    if self._policy.classify(edited) is not Risk.APPROVAL:
+                        raise ValueError("edited proposal is not approvable")
+                return await graph_ref[0].ainvoke(
+                    Command(resume=_decision_to_dict(decision)),
+                    _config(run_id),
                 )
-                edited = ToolProposal(
-                    pending.proposal.call_id,
-                    pending.proposal.tool_name,
-                    decision.arguments,
-                )
-                if self._policy.classify(edited) is not Risk.APPROVAL:
-                    raise ValueError("edited proposal is not approvable")
-            result = await self._invoke_with_timeout_budget(
-                graph,
+
+            result = await self._run_active_interval(
                 run_id,
-                Command(resume=_decision_to_dict(decision)),
                 remaining,
+                started,
+                invoke,
+                graph_ref,
             )
             return _to_outcome(result, run_id, self._policy)
 
@@ -159,39 +230,42 @@ class LangGraphReActAgent:
         graph = await self.build_graph()
         return await self._pending_from_graph(graph, run_id)
 
-    async def _invoke_with_timeout_budget(
+    async def _run_active_interval(
         self,
-        graph: Any,
         run_id: str,
-        graph_input: Any,
         remaining: float,
+        started: float,
+        operation: Callable[[], Awaitable[Mapping[str, Any]]],
+        graph_ref: list[Any | None],
     ) -> Mapping[str, Any]:
         if remaining <= 0:
             raise BudgetExceeded("total timeout budget exceeded")
-        started = self._monotonic()
+        elapsed_before_async = max(0.0, self._monotonic() - started)
+        available = max(0.0, remaining - elapsed_before_async)
+        if available <= 0:
+            await self._persist_active_budget(run_id, 0.0, graph_ref[0])
+            raise BudgetExceeded("total timeout budget exceeded")
         result: Mapping[str, Any] | None = None
-        failure: Exception | None = None
+        failure: BaseException | None = None
         timed_out = False
         try:
-            async with asyncio.timeout(remaining):
-                result = await graph.ainvoke(
-                    graph_input,
-                    _config(run_id),
-                )
+            async with asyncio.timeout(available):
+                result = await operation()
         except TimeoutError as error:
             timed_out = True
             failure = BudgetExceeded("total timeout budget exceeded")
             failure.__cause__ = error
-        except Exception as error:
+        except BaseException as error:
             failure = error
 
         elapsed = max(0.0, self._monotonic() - started)
         updated_remaining = (
             0.0 if timed_out else max(0.0, remaining - elapsed)
         )
-        await graph.aupdate_state(
-            _config(run_id),
-            {"remaining_timeout_seconds": updated_remaining},
+        await self._persist_active_budget(
+            run_id,
+            updated_remaining,
+            graph_ref[0],
         )
         if failure is not None:
             raise failure
@@ -200,6 +274,33 @@ class LangGraphReActAgent:
         if result is None:
             raise RuntimeError("graph invocation produced no result")
         return result
+
+    async def _persist_active_budget(
+        self,
+        run_id: str,
+        remaining: float,
+        graph: Any | None,
+    ) -> None:
+        self._budgets.save(run_id, remaining)
+        if graph is None:
+            return
+
+        async def update_graph() -> None:
+            try:
+                await graph.aupdate_state(
+                    _config(run_id),
+                    {"remaining_timeout_seconds": remaining},
+                )
+            except BaseException:
+                # The durable sidecar is authoritative when graph checkpoint
+                # update cannot complete (including repeated cancellation).
+                return
+
+        task = asyncio.create_task(update_graph())
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await task
 
     async def build_graph(self) -> Any:
         definitions = validate_function_tools(
@@ -852,11 +953,13 @@ def _config(run_id: str) -> dict[str, dict[str, str]]:
     return {"configurable": {"thread_id": run_id}}
 
 
-def _remaining_timeout(snapshot: Any) -> float:
-    values = getattr(snapshot, "values", {})
-    remaining = values.get("remaining_timeout_seconds")
-    if type(remaining) not in {int, float} or remaining < 0:
-        raise ValueError("checkpoint has no valid remaining timeout budget")
+def _valid_remaining(remaining: Any) -> float:
+    if (
+        type(remaining) not in {int, float}
+        or not math.isfinite(remaining)
+        or remaining < 0
+    ):
+        raise ValueError("remaining timeout budget must be a finite non-negative number")
     return float(remaining)
 
 

@@ -4,7 +4,9 @@ import json
 import subprocess
 import sys
 import time
+import asyncio
 from collections import deque
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -128,6 +130,54 @@ class ScriptedMonotonic:
 
     def __call__(self) -> float:
         return self._values.popleft()
+
+
+class MutableMonotonic:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class ClockingBuildMCP(GraphMCP):
+    def __init__(
+        self,
+        clock: MutableMonotonic,
+        *,
+        cancel_on_call: int | None = None,
+    ) -> None:
+        super().__init__()
+        self.clock = clock
+        self.cancel_on_call = cancel_on_call
+        self.list_calls = 0
+
+    async def list_function_tools(self) -> list[dict[str, Any]]:
+        self.list_calls += 1
+        if self.list_calls == self.cancel_on_call:
+            self.clock.advance(3)
+            raise asyncio.CancelledError
+        self.clock.advance(4 if self.list_calls == 1 else 0)
+        return await super().list_function_tools()
+
+
+class SlowBuildMCP(GraphMCP):
+    async def list_function_tools(self) -> list[dict[str, Any]]:
+        await asyncio.sleep(0.05)
+        return await super().list_function_tools()
+
+
+class ClockingClaims:
+    def __init__(self, clock: MutableMonotonic) -> None:
+        self.clock = clock
+
+    @contextmanager
+    def claim(self, run_id: str):
+        self.clock.advance(2)
+        yield
 
 
 class SlowChatModel(FakeChatModel):
@@ -763,11 +813,15 @@ async def test_timeout_budget_accumulates_across_resumes_without_human_wait(
     clock = ScriptedMonotonic(
         [
             0.0,
+            0.0,
             2.0,
+            10_000.0,
             10_000.0,
             10_003.0,
             20_000.0,
+            20_000.0,
             20_006.0,
+            30_000.0,
         ]
     )
     agent, _, mcp = make_agent(
@@ -831,6 +885,182 @@ async def test_timeout_budget_accumulates_across_resumes_without_human_wait(
 
 
 @pytest.mark.asyncio
+async def test_build_graph_active_time_is_charged_to_run_budget(tmp_path) -> None:
+    clock = MutableMonotonic()
+    mcp = ClockingBuildMCP(clock)
+    agent = LangGraphReActAgent(
+        model=FakeChatModel([AIMessage(content="done")]),
+        mcp=mcp,
+        checkpoint_path=tmp_path / "build-budget.json",
+        timeout_seconds=10,
+        monotonic=clock,
+        run_id_factory=lambda: "run-build",
+    )
+
+    outcome = await agent.start("inspect")
+
+    assert outcome.final_text == "done"
+    graph = await agent.build_graph()
+    snapshot = await graph.aget_state(
+        {"configurable": {"thread_id": "run-build"}}
+    )
+    assert snapshot.values["remaining_timeout_seconds"] == 6
+
+
+@pytest.mark.asyncio
+async def test_async_build_timeout_persists_exhaustion_before_graph_exists(
+    tmp_path,
+) -> None:
+    agent = LangGraphReActAgent(
+        model=FakeChatModel([AIMessage(content="unused")]),
+        mcp=SlowBuildMCP(),
+        checkpoint_path=tmp_path / "slow-build.json",
+        timeout_seconds=0.001,
+        run_id_factory=lambda: "run-slow-build",
+    )
+
+    with pytest.raises(BudgetExceeded, match="total timeout"):
+        await agent.start("inspect")
+    with pytest.raises(BudgetExceeded, match="total timeout"):
+        await agent.resume(
+            "run-slow-build",
+            ResumeDecision(action="approve", digest="unused"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_resume_checkpoint_load_time_is_charged(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    clock = MutableMonotonic()
+    agent, _, _ = make_agent(
+        tmp_path,
+        [
+            ai_with_calls(
+                tool_call(
+                    "call-write",
+                    "write_file",
+                    {"path": "b.py", "content": "new"},
+                )
+            ),
+            AIMessage(content="saved"),
+        ],
+        timeout_seconds=10,
+        monotonic=clock,
+    )
+    pending = await agent.start("change")
+    graph = await agent.build_graph()
+    real_get_state = graph.aget_state
+
+    async def clocked_get_state(config):
+        clock.advance(4)
+        return await real_get_state(config)
+
+    monkeypatch.setattr(graph, "aget_state", clocked_get_state)
+    monkeypatch.setattr(agent, "build_graph", lambda: _async_value(graph))
+
+    outcome = await agent.resume(
+        "run-1",
+        ResumeDecision(
+            action="approve",
+            digest=pending.pending_approval.digest,
+        ),
+    )
+
+    assert outcome.final_text == "saved"
+    snapshot = await real_get_state(
+        {"configurable": {"thread_id": "run-1"}}
+    )
+    assert snapshot.values["remaining_timeout_seconds"] == 6
+
+
+@pytest.mark.asyncio
+async def test_resume_timer_starts_before_synchronous_claim(tmp_path) -> None:
+    clock = MutableMonotonic()
+    agent, _, _ = make_agent(
+        tmp_path,
+        [
+            ai_with_calls(
+                tool_call(
+                    "call-write",
+                    "write_file",
+                    {"path": "b.py", "content": "new"},
+                )
+            ),
+            AIMessage(content="saved"),
+        ],
+        timeout_seconds=10,
+        monotonic=clock,
+    )
+    pending = await agent.start("change")
+    agent._claims = ClockingClaims(clock)
+
+    outcome = await agent.resume(
+        "run-1",
+        ResumeDecision(
+            action="approve",
+            digest=pending.pending_approval.digest,
+        ),
+    )
+
+    assert outcome.final_text == "saved"
+    graph = await agent.build_graph()
+    snapshot = await graph.aget_state(
+        {"configurable": {"thread_id": "run-1"}}
+    )
+    assert snapshot.values["remaining_timeout_seconds"] == 8
+
+
+@pytest.mark.asyncio
+async def test_cancelled_resume_persists_elapsed_and_rethrows_original(
+    tmp_path,
+) -> None:
+    clock = MutableMonotonic()
+    mcp = ClockingBuildMCP(clock, cancel_on_call=2)
+    agent = LangGraphReActAgent(
+        model=FakeChatModel(
+            [
+                ai_with_calls(
+                    tool_call(
+                        "call-write",
+                        "write_file",
+                        {"path": "b.py", "content": "new"},
+                    )
+                ),
+                AIMessage(content="saved"),
+            ]
+        ),
+        mcp=mcp,
+        checkpoint_path=tmp_path / "cancel.json",
+        timeout_seconds=10,
+        monotonic=clock,
+        run_id_factory=lambda: "run-cancel",
+    )
+    pending = await agent.start("change")
+    clock.advance(1_000)
+    decision = ResumeDecision(
+        action="approve",
+        digest=pending.pending_approval.digest,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await agent.resume("run-cancel", decision)
+
+    outcome = await agent.resume("run-cancel", decision)
+
+    assert outcome.final_text == "saved"
+    graph = await agent.build_graph()
+    snapshot = await graph.aget_state(
+        {"configurable": {"thread_id": "run-cancel"}}
+    )
+    assert snapshot.values["remaining_timeout_seconds"] == 3
+    assert mcp.calls == [
+        ("write_file", {"path": "b.py", "content": "new"})
+    ]
+
+
+@pytest.mark.asyncio
 async def test_token_budget_accumulates_declared_usage_only(tmp_path) -> None:
     over_budget = AIMessage(
         content="large",
@@ -889,7 +1119,7 @@ async def test_exhausted_model_retries_raise_documented_error(tmp_path) -> None:
         max_model_retries=1,
         sleep=no_sleep,
         timeout_seconds=10,
-        monotonic=ScriptedMonotonic([0.0, 2.0]),
+        monotonic=ScriptedMonotonic([0.0, 0.0, 2.0]),
     )
 
     with pytest.raises(ResponsesRetryError, match="2 attempts"):
