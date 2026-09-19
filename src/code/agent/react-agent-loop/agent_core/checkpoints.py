@@ -5,6 +5,7 @@ import json
 import os
 import re
 import tempfile
+from collections import deque
 from dataclasses import fields as dataclass_fields
 from dataclasses import is_dataclass
 from enum import Enum
@@ -171,7 +172,7 @@ def _contains_secret_value(value: Any, active_ids: set[int]) -> bool:
                     return True
             return False
 
-        if isinstance(value, (list, tuple)):
+        if isinstance(value, (list, tuple, deque)):
             return any(
                 _contains_secret_value(child, active_ids) for child in value
             )
