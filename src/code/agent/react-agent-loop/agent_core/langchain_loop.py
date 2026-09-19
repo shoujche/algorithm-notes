@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import fcntl
 import json
 import os
@@ -107,7 +108,15 @@ class JsonMemorySaver(InMemorySaver):
             raise ValueError("checkpoint state contains a secret-bearing field")
         with _exclusive_file_lock(self.lock_path):
             self._load()
-            result = super().put(config, checkpoint, metadata, new_versions)
+            candidate = self._copy_store()
+            result = candidate.put(
+                config,
+                checkpoint,
+                metadata,
+                new_versions,
+            )
+            self._validate_candidate(candidate)
+            self._adopt(candidate)
             self._sync_unlocked()
             return result
 
@@ -116,7 +125,10 @@ class JsonMemorySaver(InMemorySaver):
             raise ValueError("checkpoint writes contain a secret-bearing field")
         with _exclusive_file_lock(self.lock_path):
             self._load()
-            super().put_writes(config, writes, task_id, task_path)
+            candidate = self._copy_store()
+            candidate.put_writes(config, writes, task_id, task_path)
+            self._validate_candidate(candidate)
+            self._adopt(candidate)
             self._sync_unlocked()
 
     def delete_thread(self, thread_id: str) -> None:
@@ -218,6 +230,87 @@ class JsonMemorySaver(InMemorySaver):
             ],
         }
         _atomic_json_replace(self.path, payload)
+
+    def _copy_store(self) -> InMemorySaver:
+        candidate = InMemorySaver(serde=self.serde)
+        candidate.storage = copy.deepcopy(self.storage)
+        candidate.writes = copy.deepcopy(self.writes)
+        candidate.blobs = copy.deepcopy(self.blobs)
+        return candidate
+
+    def _adopt(self, candidate: InMemorySaver) -> None:
+        self.storage = candidate.storage
+        self.writes = candidate.writes
+        self.blobs = candidate.blobs
+
+    def _validate_candidate(self, candidate: InMemorySaver) -> None:
+        decoded = {
+            "storage": [
+                {
+                    "thread_id": thread_id,
+                    "namespace": namespace,
+                    "checkpoint_id": checkpoint_id,
+                    "checkpoint": candidate.serde.loads_typed(checkpoint),
+                    "metadata": candidate.serde.loads_typed(metadata),
+                    "parent": parent,
+                }
+                for thread_id, namespaces in candidate.storage.items()
+                for namespace, checkpoints in namespaces.items()
+                for checkpoint_id, (
+                    checkpoint,
+                    metadata,
+                    parent,
+                ) in checkpoints.items()
+            ],
+            "writes": [
+                {
+                    "thread_id": thread_id,
+                    "namespace": namespace,
+                    "checkpoint_id": checkpoint_id,
+                    "task_key": task_key,
+                    "index": index,
+                    "task_id": task_id,
+                    "channel": channel,
+                    "value": candidate.serde.loads_typed(value),
+                    "task_path": task_path,
+                }
+                for (
+                    thread_id,
+                    namespace,
+                    checkpoint_id,
+                ), writes in candidate.writes.items()
+                for (
+                    task_key,
+                    index,
+                ), (
+                    task_id,
+                    channel,
+                    value,
+                    task_path,
+                ) in writes.items()
+            ],
+            "blobs": [
+                {
+                    "thread_id": thread_id,
+                    "namespace": namespace,
+                    "channel": channel,
+                    "version": version,
+                    "value": (
+                        None
+                        if value[0] == "empty"
+                        else candidate.serde.loads_typed(value)
+                    ),
+                }
+                for (
+                    thread_id,
+                    namespace,
+                    channel,
+                    version,
+                ), value in candidate.blobs.items()
+            ],
+        }
+        if contains_secret(decoded):
+            raise ValueError("checkpoint store contains a secret-bearing field")
 
 
 class SequentialHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):

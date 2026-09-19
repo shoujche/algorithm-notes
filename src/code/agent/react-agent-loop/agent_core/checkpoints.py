@@ -5,10 +5,17 @@ import json
 import os
 import re
 import tempfile
+from dataclasses import fields as dataclass_fields
+from dataclasses import is_dataclass
+from enum import Enum
 from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
+
+import attrs
+from langgraph.types import Send
+from pydantic import BaseModel
 
 from .contracts import ApprovalRequest, Risk, RunState, ToolProposal, to_json_value
 
@@ -116,25 +123,95 @@ def _value_looks_like_secret(value: str) -> bool:
 
 
 def contains_secret(value: Any) -> bool:
-    """Heuristically detect secret-bearing values in nested checkpoint data."""
-    if isinstance(value, Mapping):
-        for key, child in value.items():
-            normalized_key = _normalize_key(str(key))
-            if normalized_key in _ALLOWED_TOKEN_METRICS:
-                if type(child) is int and child >= 0:
-                    continue
-                return True
-            if _key_may_hold_secret(str(key)) or contains_secret(child):
-                return True
-    elif isinstance(value, (list, tuple)):
-        return any(contains_secret(child) for child in value)
-    elif isinstance(value, str):
+    """Fail closed on secret-like or unsupported checkpoint values."""
+    return _contains_secret_value(value, set())
+
+
+def _contains_secret_value(value: Any, active_ids: set[int]) -> bool:
+    if value is None or type(value) in {bool, int, float}:
+        return False
+    if isinstance(value, str):
         return _value_looks_like_secret(value)
-    elif hasattr(value, "model_dump"):
-        return contains_secret(
-            value.model_dump(mode="json", by_alias=True, exclude_none=True)
+    if isinstance(value, Enum):
+        return _contains_secret_value(
+            object.__getattribute__(value, "_value_"),
+            active_ids,
         )
-    return False
+
+    identity = id(value)
+    if identity in active_ids:
+        return True
+    active_ids.add(identity)
+    try:
+        if isinstance(value, Mapping):
+            for key, child in value.items():
+                normalized_key = _normalize_key(str(key))
+                if normalized_key in _ALLOWED_TOKEN_METRICS:
+                    if type(child) is int and child >= 0:
+                        continue
+                    return True
+                if _key_may_hold_secret(str(key)) or _contains_secret_value(
+                    child,
+                    active_ids,
+                ):
+                    return True
+            return False
+
+        namedtuple_fields = getattr(type(value), "_fields", None)
+        if (
+            isinstance(value, tuple)
+            and isinstance(namedtuple_fields, tuple)
+            and all(isinstance(name, str) for name in namedtuple_fields)
+        ):
+            for index, name in enumerate(namedtuple_fields):
+                if _key_may_hold_secret(name) or _contains_secret_value(
+                    tuple.__getitem__(value, index),
+                    active_ids,
+                ):
+                    return True
+            return False
+
+        if isinstance(value, (list, tuple)):
+            return any(
+                _contains_secret_value(child, active_ids) for child in value
+            )
+
+        if isinstance(value, BaseModel):
+            return _contains_secret_value(
+                value.model_dump(mode="json", by_alias=True, exclude_none=True),
+                active_ids,
+            )
+
+        if isinstance(value, Send):
+            return any(
+                _contains_secret_value(
+                    object.__getattribute__(value, field_name),
+                    active_ids,
+                )
+                for field_name in ("node", "arg", "timeout")
+            )
+
+        if is_dataclass(value) and not isinstance(value, type):
+            for field in dataclass_fields(value):
+                if _key_may_hold_secret(field.name) or _contains_secret_value(
+                    object.__getattribute__(value, field.name),
+                    active_ids,
+                ):
+                    return True
+            return False
+
+        if attrs.has(type(value)):
+            for field in attrs.fields(type(value)):
+                if _key_may_hold_secret(field.name) or _contains_secret_value(
+                    object.__getattribute__(value, field.name),
+                    active_ids,
+                ):
+                    return True
+            return False
+
+        return True
+    finally:
+        active_ids.remove(identity)
 
 
 _contains_secret = contains_secret

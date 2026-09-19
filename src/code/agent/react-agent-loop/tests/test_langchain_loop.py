@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections import namedtuple
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import attrs
 import pytest
-from langgraph.checkpoint.base import empty_checkpoint
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
+from langgraph.checkpoint.base import empty_checkpoint
+from langgraph.types import Command, Send
 from pydantic import PrivateAttr
 
 from agent_core.checkpoints import contains_secret
@@ -99,6 +103,19 @@ class DefinitionMCP(FakeLangChainMCP):
 
     async def list_function_tools(self) -> list[dict[str, Any]]:
         return self.definitions
+
+
+class ClaimCheckingMCP(FakeLangChainMCP):
+    def __init__(self, ledger_path: Path) -> None:
+        super().__init__()
+        self.ledger_path = ledger_path
+        self.statuses_at_dispatch: list[str | None] = []
+
+    async def call(self, name: str, arguments: dict[str, Any]) -> str:
+        self.statuses_at_dispatch.append(
+            SideEffectLedger(self.ledger_path).status("run-1", "call-write")
+        )
+        return await super().call(name, arguments)
 
 
 def tool_call(call_id: str, name: str, arguments: dict[str, Any]) -> AIMessage:
@@ -205,6 +222,113 @@ def test_json_memory_saver_rejects_nested_secret_in_pending_writes(
 
 
 @pytest.mark.parametrize(
+    "config",
+    [
+        {
+            "configurable": {
+                "thread_id": "run-config-secret",
+                "checkpoint_ns": "",
+            },
+            "metadata": {"password": "not-for-disk"},
+        },
+        {
+            "configurable": {
+                "thread_id": "run-config-secret",
+                "checkpoint_ns": "",
+                "api_key": "not-for-disk",
+            }
+        },
+    ],
+)
+def test_json_memory_saver_rejects_persisted_config_metadata_without_mutation(
+    tmp_path,
+    config: dict[str, Any],
+) -> None:
+    path = tmp_path / "langchain.json"
+    saver = JsonMemorySaver(path)
+    original = empty_checkpoint()
+    saver.put(
+        {"configurable": {"thread_id": "run-good", "checkpoint_ns": ""}},
+        original,
+        {},
+        {},
+    )
+    before = path.read_bytes()
+    candidate = empty_checkpoint()
+
+    with pytest.raises(ValueError, match="secret"):
+        saver.put(config, candidate, {}, {})
+
+    assert path.read_bytes() == before
+    assert saver.get_tuple(config) is None
+    assert (
+        saver.get_tuple(
+            {"configurable": {"thread_id": "run-good", "checkpoint_ns": ""}}
+        )
+        is not None
+    )
+
+
+@dataclass(slots=True)
+class SlottedEnvelope:
+    payload: Any
+
+
+@attrs.define(slots=True)
+class AttrsEnvelope:
+    payload: Any
+
+
+SecretTuple = namedtuple("SecretTuple", ["api_key"])
+
+
+@pytest.mark.parametrize(
+    "wrapped",
+    [
+        SlottedEnvelope({"password": "not-for-disk"}),
+        AttrsEnvelope({"api_key": "not-for-disk"}),
+        SecretTuple("not-for-disk"),
+        Command(update={"nested": {"password": "not-for-disk"}}),
+        Send("tools", {"nested": {"api_key": "not-for-disk"}}),
+    ],
+)
+def test_json_memory_saver_rejects_serializable_wrappers_in_pending_writes(
+    tmp_path,
+    wrapped: Any,
+) -> None:
+    path = tmp_path / "langchain.json"
+    saver = JsonMemorySaver(path)
+
+    with pytest.raises(ValueError, match="secret"):
+        saver.put_writes(
+            {
+                "configurable": {
+                    "thread_id": "run-wrapper",
+                    "checkpoint_ns": "",
+                    "checkpoint_id": "cp",
+                }
+            },
+            [("pending", wrapped)],
+            "task-1",
+        )
+
+    assert not path.exists()
+
+
+def test_secret_detector_rejects_cycles_and_unknown_objects_without_properties() -> None:
+    cyclic: list[Any] = []
+    cyclic.append(cyclic)
+
+    class Unknown:
+        @property
+        def password(self) -> str:
+            raise AssertionError("properties must not be evaluated")
+
+    assert contains_secret(cyclic) is True
+    assert contains_secret(Unknown()) is True
+
+
+@pytest.mark.parametrize(
     "metric",
     [
         {"input_tokens": 12},
@@ -248,28 +372,106 @@ def test_json_memory_saver_allows_non_negative_token_metrics(
 
 def test_side_effect_claim_is_persistent_across_processes(tmp_path) -> None:
     ledger_path = tmp_path / "side-effects.json"
-    script = (
-        "from agent_core.langchain_loop import SideEffectLedger;"
-        "import sys;"
-        "print(SideEffectLedger(sys.argv[1]).claim('run-1', 'call-write'))"
-    )
+    barrier = tmp_path / "go"
+    script = """
+import sys
+import time
+from pathlib import Path
+from agent_core.langchain_loop import SideEffectLedger
 
-    first = subprocess.run(
-        [sys.executable, "-c", script, str(ledger_path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    second = subprocess.run(
-        [sys.executable, "-c", script, str(ledger_path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+ledger, ready, barrier = map(Path, sys.argv[1:])
+ready.write_text("ready", encoding="utf-8")
+while not barrier.exists():
+    time.sleep(0.01)
+print(SideEffectLedger(ledger).claim("run-1", "call-write"), flush=True)
+"""
+    processes: list[tuple[subprocess.Popen[str], Path]] = []
+    for index in range(2):
+        ready = tmp_path / f"claim-{index}.ready"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(ledger_path),
+                str(ready),
+                str(barrier),
+            ],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        processes.append((process, ready))
+    for _, ready in processes:
+        for _ in range(500):
+            if ready.exists():
+                break
+            __import__("time").sleep(0.01)
+        assert ready.exists()
+    barrier.write_text("go", encoding="utf-8")
+    results = []
+    for process, _ in processes:
+        stdout, _ = process.communicate(timeout=10)
+        assert process.returncode == 0
+        results.append(stdout.strip())
 
-    assert first.stdout.strip() == "True"
-    assert second.stdout.strip() == "False"
+    assert sorted(results) == ["False", "True"]
     assert SideEffectLedger(ledger_path).status("run-1", "call-write") == "claimed"
+
+
+@pytest.mark.asyncio
+async def test_runtime_call_id_is_claimed_before_dispatch_and_blocks_replay(
+    tmp_path,
+) -> None:
+    checkpoint_path = tmp_path / "langchain.json"
+    ledger_path = tmp_path / "langchain.json.side-effects.json"
+    mcp = ClaimCheckingMCP(ledger_path)
+    first_agent = LangChainReActAgent(
+        model=FakeChatModel(
+            [
+                tool_call(
+                    "call-write",
+                    "write_file",
+                    {"path": "b.py", "content": "new"},
+                ),
+                AIMessage(content="saved"),
+            ]
+        ),
+        mcp=mcp,
+        checkpoint_path=checkpoint_path,
+        run_id_factory=lambda: "run-1",
+    )
+    pending = await first_agent.start("change")
+    pending_checkpoint = checkpoint_path.read_bytes()
+    decision = ResumeDecision(
+        action="approve",
+        digest=pending.pending_approval.digest,
+    )
+
+    first = await first_agent.resume("run-1", decision)
+
+    assert first.final_text == "saved"
+    assert mcp.statuses_at_dispatch == ["claimed"]
+    assert mcp.calls == [
+        ("write_file", {"path": "b.py", "content": "new"})
+    ]
+    assert SideEffectLedger(ledger_path).status(
+        "run-1",
+        "call-write",
+    ) == "executed"
+
+    checkpoint_path.write_bytes(pending_checkpoint)
+    replay_agent = LangChainReActAgent(
+        model=FakeChatModel([AIMessage(content="replay handled")]),
+        mcp=mcp,
+        checkpoint_path=checkpoint_path,
+    )
+    replay = await replay_agent.resume("run-1", decision)
+
+    assert replay.final_text == "replay handled"
+    assert mcp.statuses_at_dispatch == ["claimed"]
+    assert mcp.calls == [
+        ("write_file", {"path": "b.py", "content": "new"})
+    ]
 
 
 def test_subprocess_reads_persisted_checkpoint(tmp_path) -> None:
