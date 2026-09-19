@@ -164,6 +164,37 @@ async def verify(cdp_url: str, page_url: str) -> None:
             f"direct hash active mismatch: {direct_hash_active}"
         )
 
+        await cdp.evaluate(
+            "window.__sidebarPersisted = false;"
+            "window.addEventListener('pageshow', event => {"
+            "window.__sidebarPersisted = event.persisted;"
+            "}, {once: true});"
+        )
+        await cdp.call(
+            "Page.navigate",
+            {"url": page_url.rsplit("/agent/", 1)[0] + "/"},
+        )
+        await asyncio.sleep(0.3)
+        await cdp.evaluate("history.back()")
+        persisted = False
+        for _ in range(40):
+            await asyncio.sleep(0.1)
+            persisted = bool(
+                await cdp.evaluate(
+                    "location.pathname.endsWith('/agent/react-agent-loop')"
+                    " && window.__sidebarPersisted === true"
+                )
+            )
+            if persisted:
+                break
+        assert persisted, "history back did not restore a persisted bfcache page"
+        await cdp.evaluate(
+            "document.getElementById('mcp').scrollIntoView("
+            "{block: 'start', behavior: 'instant'})"
+        )
+        bfcache_active = await wait_for_active(cdp, "mcp")
+        assert bfcache_active == "mcp", f"bfcache active mismatch: {bfcache_active}"
+
         await cdp.call(
             "Emulation.setDeviceMetricsOverride",
             {
@@ -207,6 +238,48 @@ async def verify(cdp_url: str, page_url: str) -> None:
             "count": "1 / 9",
         }, f"reduced-motion state mismatch: {reduced_before}"
         assert reduced_after == "1 / 9", f"reduced-motion autoplayed: {reduced_after}"
+
+        await cdp.call("Page.navigate", {"url": "about:blank"})
+        await cdp.call(
+            "Emulation.setDeviceMetricsOverride",
+            {
+                "width": 1440,
+                "height": 4000,
+                "deviceScaleFactor": 1,
+                "mobile": False,
+            },
+        )
+        await cdp.call("Page.navigate", {"url": page_url})
+        await asyncio.sleep(0.3)
+        short_page = await cdp.evaluate(
+            "(() => {"
+            "const style = document.createElement('style');"
+            "style.textContent = `"
+            ".layout { display: block !important; padding: 0 !important; }"
+            "aside { position: fixed !important; }"
+            "main .hero, footer { display: none !important; }"
+            "section.article { height: 100px !important; margin: 0 !important;"
+            " overflow: hidden !important; }"
+            "section.article > * { display: none !important; }"
+            "`;"
+            "document.head.append(style);"
+            "window.dispatchEvent(new Event('resize'));"
+            "return true;"
+            "})()"
+        )
+        assert short_page
+        await asyncio.sleep(0.2)
+        short_page_state = await cdp.evaluate(
+            "({active: document.querySelector('aside a[data-nav].active')?.dataset.nav,"
+            "scrollHeight: document.documentElement.scrollHeight,"
+            "innerHeight: window.innerHeight})"
+        )
+        assert short_page_state["scrollHeight"] <= short_page_state["innerHeight"], (
+            f"short-page fixture still scrolls: {short_page_state}"
+        )
+        assert short_page_state["active"] == "mental-model", (
+            f"short-page active mismatch: {short_page_state}"
+        )
         assert not cdp.console_errors, f"console errors: {cdp.console_errors}"
 
         print(
@@ -220,11 +293,16 @@ async def verify(cdp_url: str, page_url: str) -> None:
                         "hash": direct_hash,
                         "active": direct_hash_active,
                     },
+                    "bfcache": {
+                        "persistedPageshow": persisted,
+                        "activeAfterReturn": bfcache_active,
+                    },
                     "mobile": {"active": mobile_active, "overflow": overflow},
                     "reducedMotion": {
                         "before": reduced_before,
                         "after": reduced_after,
                     },
+                    "shortPage": short_page_state,
                     "consoleErrors": 0,
                 },
                 ensure_ascii=False,
