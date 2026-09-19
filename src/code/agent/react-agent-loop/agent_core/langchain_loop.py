@@ -21,14 +21,69 @@ from langchain.agents.middleware import (
     ToolCallLimitMiddleware,
     ToolRetryMiddleware,
 )
+from langchain.tools import ToolRuntime
 from langchain_core.messages import AIMessage, ToolCall, ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command, interrupt
 
+from .checkpoints import contains_secret
 from .contracts import ApprovalRequest, Risk, RunOutcome, ToolProposal, to_json_value
+from .mcp_adapter import validate_function_tools
 from .openai_loop import ResumeDecision
 from .policy import ToolPolicy
+
+
+class SideEffectLedger:
+    """Persist side-effect claims so replay cannot dispatch a call twice."""
+
+    _STATUSES = frozenset({"claimed", "executed", "failed"})
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        self.lock_path = self.path.with_name(f"{self.path.name}.lock")
+
+    def claim(self, run_id: str, tool_call_id: str) -> bool:
+        with _exclusive_file_lock(self.lock_path):
+            data = self._load()
+            calls = data.setdefault(run_id, {})
+            if tool_call_id in calls:
+                return False
+            calls[tool_call_id] = "claimed"
+            _atomic_json_replace(self.path, data)
+            return True
+
+    def finish(self, run_id: str, tool_call_id: str, status: str) -> None:
+        if status not in {"executed", "failed"}:
+            raise ValueError("side-effect result must be executed or failed")
+        with _exclusive_file_lock(self.lock_path):
+            data = self._load()
+            calls = data.get(run_id, {})
+            if calls.get(tool_call_id) != "claimed":
+                raise ValueError("side-effect call has no active claim")
+            calls[tool_call_id] = status
+            _atomic_json_replace(self.path, data)
+
+    def status(self, run_id: str, tool_call_id: str) -> str | None:
+        with _exclusive_file_lock(self.lock_path):
+            return self._load().get(run_id, {}).get(tool_call_id)
+
+    def _load(self) -> dict[str, dict[str, str]]:
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        if not isinstance(data, dict):
+            raise ValueError("invalid side-effect ledger")
+        for run_id, calls in data.items():
+            if not isinstance(run_id, str) or not isinstance(calls, dict):
+                raise ValueError("invalid side-effect ledger")
+            if not all(
+                isinstance(call_id, str) and status in self._STATUSES
+                for call_id, status in calls.items()
+            ):
+                raise ValueError("invalid side-effect ledger")
+        return data
 
 
 class JsonMemorySaver(InMemorySaver):
@@ -37,22 +92,43 @@ class JsonMemorySaver(InMemorySaver):
     def __init__(self, path: str | Path) -> None:
         super().__init__()
         self.path = Path(path)
-        self._load()
+        self.lock_path = self.path.with_name(f"{self.path.name}.lock")
+        with _exclusive_file_lock(self.lock_path):
+            self._load()
 
     def put(self, config, checkpoint, metadata, new_versions):
-        result = super().put(config, checkpoint, metadata, new_versions)
-        self._sync()
-        return result
+        if contains_secret(
+            {
+                "checkpoint": checkpoint,
+                "metadata": metadata,
+                "new_versions": new_versions,
+            }
+        ):
+            raise ValueError("checkpoint state contains a secret-bearing field")
+        with _exclusive_file_lock(self.lock_path):
+            self._load()
+            result = super().put(config, checkpoint, metadata, new_versions)
+            self._sync_unlocked()
+            return result
 
     def put_writes(self, config, writes, task_id, task_path="") -> None:
-        super().put_writes(config, writes, task_id, task_path)
-        self._sync()
+        if contains_secret({"writes": writes}):
+            raise ValueError("checkpoint writes contain a secret-bearing field")
+        with _exclusive_file_lock(self.lock_path):
+            self._load()
+            super().put_writes(config, writes, task_id, task_path)
+            self._sync_unlocked()
 
     def delete_thread(self, thread_id: str) -> None:
-        super().delete_thread(thread_id)
-        self._sync()
+        with _exclusive_file_lock(self.lock_path):
+            self._load()
+            super().delete_thread(thread_id)
+            self._sync_unlocked()
 
     def _load(self) -> None:
+        self.storage.clear()
+        self.writes.clear()
+        self.blobs.clear()
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except FileNotFoundError:
@@ -87,7 +163,7 @@ class JsonMemorySaver(InMemorySaver):
                 value
             )
 
-    def _sync(self) -> None:
+    def _sync_unlocked(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.path.parent, 0o700)
         payload = {
@@ -141,33 +217,7 @@ class JsonMemorySaver(InMemorySaver):
                 ), value in self.blobs.items()
             ],
         }
-        temporary_path: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=self.path.parent,
-                prefix=f"{self.path.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as temporary:
-                temporary_path = Path(temporary.name)
-                os.fchmod(temporary.fileno(), 0o600)
-                json.dump(
-                    payload,
-                    temporary,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    allow_nan=False,
-                )
-                temporary.flush()
-                os.fsync(temporary.fileno())
-            os.replace(temporary_path, self.path)
-            os.chmod(self.path, 0o600)
-        finally:
-            if temporary_path is not None:
-                temporary_path.unlink(missing_ok=True)
+        _atomic_json_replace(self.path, payload)
 
 
 class SequentialHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
@@ -283,6 +333,11 @@ class LangChainReActAgent:
         self._max_tool_calls = max_tool_calls
         self._max_tool_retries = max_tool_retries
         self._run_id_factory = run_id_factory or (lambda: uuid.uuid4().hex)
+        self._side_effects = SideEffectLedger(
+            self._checkpoint_path.with_name(
+                f"{self._checkpoint_path.name}.side-effects.json"
+            )
+        )
 
     async def start(self, user_input: str) -> RunOutcome:
         run_id = self._run_id_factory()
@@ -348,9 +403,12 @@ class LangChainReActAgent:
         return _pending_from_snapshot(snapshot, self._policy)
 
     async def _build_graph(self):
-        definitions = await self._mcp.list_function_tools()
+        definitions = validate_function_tools(
+            await self._mcp.list_function_tools()
+        )
         tools: list[StructuredTool] = []
         interrupt_on: dict[str, dict[str, Any]] = {}
+        retryable_tools: list[str] = []
         for definition in definitions:
             name = _required_string(definition, "name")
             schema = definition.get("parameters")
@@ -361,10 +419,46 @@ class LangChainReActAgent:
                 continue
 
             async def invoke_tool(
+                runtime: ToolRuntime,
                 _tool_name: str = name,
+                _risk: Risk = risk,
                 **arguments: Any,
             ) -> str:
-                return await self._mcp.call(_tool_name, arguments)
+                if _risk is Risk.READ_ONLY:
+                    return await self._mcp.call(_tool_name, arguments)
+                if runtime.tool_call_id is None:
+                    raise ValueError("side-effect tool call has no call ID")
+                run_id = _required_string(
+                    runtime.config["configurable"],
+                    "thread_id",
+                )
+                tool_call_id = runtime.tool_call_id
+                if not self._side_effects.claim(run_id, tool_call_id):
+                    return json.dumps(
+                        {
+                            "error": "duplicate_side_effect_call",
+                            "status": self._side_effects.status(
+                                run_id,
+                                tool_call_id,
+                            ),
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                try:
+                    result = await self._mcp.call(_tool_name, arguments)
+                except Exception as error:
+                    self._side_effects.finish(run_id, tool_call_id, "failed")
+                    return json.dumps(
+                        {
+                            "error": "side_effect_outcome_uncertain",
+                            "detail": str(error),
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                self._side_effects.finish(run_id, tool_call_id, "executed")
+                return result
 
             tools.append(
                 StructuredTool.from_function(
@@ -379,6 +473,8 @@ class LangChainReActAgent:
                     "allowed_decisions": ["approve", "edit", "reject"],
                     "args_schema": dict(schema),
                 }
+            else:
+                retryable_tools.append(name)
 
         middleware = [
             ModelCallLimitMiddleware(
@@ -391,6 +487,7 @@ class LangChainReActAgent:
             ),
             ToolRetryMiddleware(
                 max_retries=self._max_tool_retries,
+                tools=retryable_tools,
                 on_failure=lambda error: str(error),
                 initial_delay=0,
                 jitter=False,
@@ -548,3 +645,48 @@ def _decode_typed(value: Any) -> tuple[str, bytes]:
     ):
         raise ValueError("invalid typed checkpoint value")
     return value[0], base64.b64decode(value[1], validate=True)
+
+
+@contextmanager
+def _exclusive_file_lock(path: Path) -> Iterator[None]:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
+    descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    os.chmod(path, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def _atomic_json_replace(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f"{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            os.fchmod(temporary.fileno(), 0o600)
+            json.dump(
+                payload,
+                temporary,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+        os.chmod(path, 0o600)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)

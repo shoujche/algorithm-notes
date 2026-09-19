@@ -115,7 +115,8 @@ def _value_looks_like_secret(value: str) -> bool:
     )
 
 
-def _contains_secret(value: Any) -> bool:
+def contains_secret(value: Any) -> bool:
+    """Heuristically detect secret-bearing values in nested checkpoint data."""
     if isinstance(value, Mapping):
         for key, child in value.items():
             normalized_key = _normalize_key(str(key))
@@ -123,13 +124,20 @@ def _contains_secret(value: Any) -> bool:
                 if type(child) is int and child >= 0:
                     continue
                 return True
-            if _key_may_hold_secret(str(key)) or _contains_secret(child):
+            if _key_may_hold_secret(str(key)) or contains_secret(child):
                 return True
     elif isinstance(value, (list, tuple)):
-        return any(_contains_secret(child) for child in value)
+        return any(contains_secret(child) for child in value)
     elif isinstance(value, str):
         return _value_looks_like_secret(value)
+    elif hasattr(value, "model_dump"):
+        return contains_secret(
+            value.model_dump(mode="json", by_alias=True, exclude_none=True)
+        )
     return False
+
+
+_contains_secret = contains_secret
 
 
 def _proposal_to_dict(proposal: ToolProposal) -> dict[str, Any]:

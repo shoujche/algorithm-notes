@@ -31,7 +31,7 @@ class MCPToolClient:
                     "strict": True,
                 }
             )
-        return tools
+        return validate_function_tools(tools)
 
     async def call(self, name: str, arguments: dict[str, Any]) -> str:
         result = await self._session.call_tool(name, arguments)
@@ -50,6 +50,36 @@ class MCPToolClient:
             separators=(",", ":"),
             allow_nan=False,
         )
+
+
+def validate_function_tools(
+    definitions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Validate the strict function-tool contract shared by every agent layer."""
+    validated: list[dict[str, Any]] = []
+    names: set[str] = set()
+    for definition in definitions:
+        if not isinstance(definition, Mapping):
+            raise ValueError("function tool definition must be an object")
+        name = definition.get("name")
+        if not isinstance(name, str) or not name:
+            raise ValueError("function tool name must be a non-empty string")
+        if name in names:
+            raise ValueError(f"function tool names must be unique: {name!r}")
+        names.add(name)
+        if definition.get("type") != "function":
+            raise ValueError(f"tool {name!r} must have type 'function'")
+        if definition.get("strict") is not True:
+            raise ValueError(f"function schema for {name!r} must be strict")
+        schema = definition.get("parameters")
+        if not isinstance(schema, Mapping) or schema.get("type") != "object":
+            raise ValueError(
+                f"tool {name} function parameter root must be object"
+            )
+        normalized = dict(definition)
+        normalized["parameters"] = _strict_schema(schema, f"tool {name}")
+        validated.append(normalized)
+    return validated
 
 
 _TYPE_KEYS = {

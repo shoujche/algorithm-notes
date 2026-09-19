@@ -7,13 +7,19 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from langgraph.checkpoint.base import empty_checkpoint
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import PrivateAttr
 
+from agent_core.checkpoints import contains_secret
 from agent_core.contracts import to_json_value
-from agent_core.langchain_loop import LangChainReActAgent
+from agent_core.langchain_loop import (
+    JsonMemorySaver,
+    LangChainReActAgent,
+    SideEffectLedger,
+)
 from agent_core.openai_loop import ResumeDecision
 from tests.fakes import FakeMCPClient
 
@@ -86,6 +92,15 @@ class FailingMCP(FakeLangChainMCP):
         raise RuntimeError("sandbox unavailable")
 
 
+class DefinitionMCP(FakeLangChainMCP):
+    def __init__(self, definitions: list[dict[str, Any]]) -> None:
+        super().__init__()
+        self.definitions = definitions
+
+    async def list_function_tools(self) -> list[dict[str, Any]]:
+        return self.definitions
+
+
 def tool_call(call_id: str, name: str, arguments: dict[str, Any]) -> AIMessage:
     return AIMessage(
         content="",
@@ -111,6 +126,361 @@ def make_agent(tmp_path, scripted, *, mcp=None, **limits):
         **limits,
     )
     return agent, model, mcp
+
+
+@pytest.mark.parametrize(
+    "nested_state",
+    [
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": {"profile": {"password": "not-for-disk"}},
+                }
+            ]
+        },
+        {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "name": "write_file",
+                            "args": {"nested": {"api_key": "not-for-disk"}},
+                        }
+                    ],
+                }
+            ]
+        },
+        {
+            "messages": [
+                {
+                    "role": "tool",
+                    "content": {"result": {"credential": "not-for-disk"}},
+                }
+            ]
+        },
+    ],
+)
+def test_json_memory_saver_rejects_nested_secrets_before_checkpoint_write(
+    tmp_path,
+    nested_state: dict[str, Any],
+) -> None:
+    path = tmp_path / "langchain.json"
+    saver = JsonMemorySaver(path)
+    checkpoint = empty_checkpoint()
+    checkpoint["channel_values"] = nested_state
+
+    with pytest.raises(ValueError, match="secret"):
+        saver.put(
+            {"configurable": {"thread_id": "run-secret", "checkpoint_ns": ""}},
+            checkpoint,
+            {},
+            {},
+        )
+
+    assert not path.exists()
+
+
+def test_json_memory_saver_rejects_nested_secret_in_pending_writes(
+    tmp_path,
+) -> None:
+    path = tmp_path / "langchain.json"
+    saver = JsonMemorySaver(path)
+
+    with pytest.raises(ValueError, match="secret"):
+        saver.put_writes(
+            {
+                "configurable": {
+                    "thread_id": "run-secret",
+                    "checkpoint_ns": "",
+                    "checkpoint_id": "cp",
+                }
+            },
+            [("messages", {"tool_output": {"authorization": "not-for-disk"}})],
+            "task-1",
+        )
+
+    assert not path.exists()
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [
+        {"input_tokens": 12},
+        {"output_tokens": 8},
+        {"total_tokens": 20},
+        {"token_count": 20},
+        {"token_budget": 100},
+        {"max_tokens": 200},
+    ],
+)
+def test_json_memory_saver_allows_non_negative_token_metrics(
+    tmp_path,
+    metric: dict[str, int],
+) -> None:
+    path = tmp_path / "langchain.json"
+    saver = JsonMemorySaver(path)
+    checkpoint = empty_checkpoint()
+    checkpoint["channel_values"] = {"usage": {"nested": metric}}
+
+    saver.put(
+        {"configurable": {"thread_id": "run-metrics", "checkpoint_ns": ""}},
+        checkpoint,
+        {},
+        {},
+    )
+    saver.put_writes(
+        {
+            "configurable": {
+                "thread_id": "run-metrics",
+                "checkpoint_ns": "",
+                "checkpoint_id": checkpoint["id"],
+            }
+        },
+        [("usage", {"nested": metric})],
+        "task-1",
+    )
+
+    assert path.exists()
+    assert contains_secret({"usage": metric}) is False
+
+
+def test_side_effect_claim_is_persistent_across_processes(tmp_path) -> None:
+    ledger_path = tmp_path / "side-effects.json"
+    script = (
+        "from agent_core.langchain_loop import SideEffectLedger;"
+        "import sys;"
+        "print(SideEffectLedger(sys.argv[1]).claim('run-1', 'call-write'))"
+    )
+
+    first = subprocess.run(
+        [sys.executable, "-c", script, str(ledger_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    second = subprocess.run(
+        [sys.executable, "-c", script, str(ledger_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert first.stdout.strip() == "True"
+    assert second.stdout.strip() == "False"
+    assert SideEffectLedger(ledger_path).status("run-1", "call-write") == "claimed"
+
+
+def test_subprocess_reads_persisted_checkpoint(tmp_path) -> None:
+    path = tmp_path / "langchain.json"
+    saver = JsonMemorySaver(path)
+    checkpoint = empty_checkpoint()
+    saver.put(
+        {"configurable": {"thread_id": "run-subprocess", "checkpoint_ns": ""}},
+        checkpoint,
+        {},
+        {},
+    )
+    script = (
+        "from agent_core.langchain_loop import JsonMemorySaver;"
+        "import sys;"
+        "config={'configurable':"
+        "{'thread_id':'run-subprocess','checkpoint_ns':''}};"
+        "print(JsonMemorySaver(sys.argv[1]).get_tuple(config) is not None)"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.stdout.strip() == "True"
+
+
+def test_different_processes_merge_different_threads_without_lost_update(
+    tmp_path,
+) -> None:
+    path = tmp_path / "langchain.json"
+    go = tmp_path / "go"
+    script = """
+import sys
+import time
+from pathlib import Path
+from agent_core.langchain_loop import JsonMemorySaver
+from langgraph.checkpoint.base import empty_checkpoint
+
+path, run_id, ready, go = map(Path, sys.argv[1:])
+saver = JsonMemorySaver(path)
+ready.write_text("ready", encoding="utf-8")
+while not go.exists():
+    time.sleep(0.01)
+checkpoint = empty_checkpoint()
+checkpoint["channel_values"] = {"run_id": run_id.name}
+saver.put(
+    {"configurable": {"thread_id": run_id.name, "checkpoint_ns": ""}},
+    checkpoint,
+    {},
+    {},
+)
+"""
+    processes = []
+    for run_id in ("run-a", "run-b"):
+        ready = tmp_path / f"{run_id}.ready"
+        processes.append(
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    script,
+                    str(path),
+                    run_id,
+                    str(ready),
+                    str(go),
+                ]
+            )
+        )
+    for run_id in ("run-a", "run-b"):
+        ready = tmp_path / f"{run_id}.ready"
+        for _ in range(500):
+            if ready.exists():
+                break
+            __import__("time").sleep(0.01)
+        assert ready.exists()
+    go.write_text("go", encoding="utf-8")
+    for process in processes:
+        assert process.wait(timeout=10) == 0
+
+    reloaded = JsonMemorySaver(path)
+    for run_id in ("run-a", "run-b"):
+        saved = reloaded.get_tuple(
+            {"configurable": {"thread_id": run_id, "checkpoint_ns": ""}}
+        )
+        assert saved is not None
+
+
+def test_same_run_claim_remains_exclusive_across_processes(tmp_path) -> None:
+    checkpoint = tmp_path / "langchain.json"
+    release = tmp_path / "release"
+    holder_script = """
+import sys
+import time
+from pathlib import Path
+from agent_core.langchain_loop import LangChainReActAgent
+
+agent = LangChainReActAgent(model=None, mcp=None, checkpoint_path=sys.argv[1])
+with agent._claim("run-1"):
+    print("claimed", flush=True)
+    while not Path(sys.argv[2]).exists():
+        time.sleep(0.01)
+"""
+    holder = subprocess.Popen(
+        [sys.executable, "-c", holder_script, str(checkpoint), str(release)],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert holder.stdout is not None
+    assert holder.stdout.readline().strip() == "claimed"
+    contender_script = (
+        "from agent_core.langchain_loop import LangChainReActAgent;"
+        "import sys;"
+        "agent=LangChainReActAgent(model=None,mcp=None,checkpoint_path=sys.argv[1]);"
+        "\nwith agent._claim('run-1'):\n print('unexpected')"
+    )
+    contender = subprocess.run(
+        [sys.executable, "-c", contender_script, str(checkpoint)],
+        capture_output=True,
+        text=True,
+    )
+    release.write_text("release", encoding="utf-8")
+    assert holder.wait(timeout=10) == 0
+
+    assert contender.returncode != 0
+    assert "already claimed" in contender.stderr
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("definitions", "message"),
+    [
+        (
+            [
+                {
+                    "type": "function",
+                    "name": "read_file",
+                    "description": "Read.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                        "additionalProperties": False,
+                    },
+                    "strict": False,
+                }
+            ],
+            "strict",
+        ),
+        (
+            [
+                {
+                    "type": "function",
+                    "name": "read_file",
+                    "description": "Read.",
+                    "parameters": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "strict": True,
+                }
+            ],
+            "root.*object",
+        ),
+        (
+            [
+                {
+                    "type": "function",
+                    "name": "read_file",
+                    "description": "Read.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                        "additionalProperties": False,
+                    },
+                    "strict": True,
+                },
+                {
+                    "type": "function",
+                    "name": "read_file",
+                    "description": "Duplicate.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                        "additionalProperties": False,
+                    },
+                    "strict": True,
+                },
+            ],
+            "unique",
+        ),
+    ],
+)
+async def test_structured_tools_require_task5_strict_definitions(
+    tmp_path,
+    definitions: list[dict[str, Any]],
+    message: str,
+) -> None:
+    agent = LangChainReActAgent(
+        model=FakeChatModel([AIMessage(content="unused")]),
+        mcp=DefinitionMCP(definitions),
+        checkpoint_path=tmp_path / "langchain.json",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        await agent.start("inspect")
 
 
 @pytest.mark.asyncio
@@ -343,6 +713,63 @@ async def test_tool_failure_becomes_controlled_observation(tmp_path) -> None:
     assert isinstance(failure, ToolMessage)
     assert failure.status == "error"
     assert "sandbox unavailable" in str(failure.content)
+
+
+@pytest.mark.asyncio
+async def test_read_tool_failure_uses_bounded_automatic_retries(tmp_path) -> None:
+    agent, _, mcp = make_agent(
+        tmp_path,
+        [
+            tool_call("call-read", "read_file", {"path": "a.py"}),
+            AIMessage(content="could not inspect"),
+        ],
+        mcp=FailingMCP(),
+        max_tool_retries=1,
+    )
+
+    outcome = await agent.start("inspect")
+
+    assert outcome.final_text == "could not inspect"
+    assert mcp.calls == [
+        ("read_file", {"path": "a.py"}),
+        ("read_file", {"path": "a.py"}),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    [
+        ("write_file", {"path": "b.py", "content": "new"}),
+        ("run_command", {"argv": ["pytest", "-q"], "cwd": "."}),
+    ],
+)
+async def test_sensitive_tool_failure_is_never_automatically_retried(
+    tmp_path,
+    name: str,
+    arguments: dict[str, Any],
+) -> None:
+    agent, _, mcp = make_agent(
+        tmp_path,
+        [
+            tool_call("call-sensitive", name, arguments),
+            AIMessage(content="side effect outcome uncertain"),
+        ],
+        mcp=FailingMCP(),
+        max_tool_retries=2,
+    )
+    pending = await agent.start("change")
+
+    outcome = await agent.resume(
+        "run-1",
+        ResumeDecision(
+            action="approve",
+            digest=pending.pending_approval.digest,
+        ),
+    )
+
+    assert outcome.final_text == "side effect outcome uncertain"
+    assert mcp.calls == [(name, arguments)]
 
 
 @pytest.mark.asyncio
