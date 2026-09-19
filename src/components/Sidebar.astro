@@ -44,18 +44,62 @@ const { chapterCn, chapterEn, currentSlug, sections = [] } = Astro.props;
 
 <script>
   // 滚动高亮当前小节
-  const links = [...document.querySelectorAll<HTMLAnchorElement>('aside .nav a[data-nav]')];
-  const secs = links.map((a) => document.getElementById(a.dataset.nav!)).filter(Boolean) as HTMLElement[];
-  if (secs.length) {
-    const obs = new IntersectionObserver((es) => {
-      es.forEach((e) => {
-        if (e.isIntersecting) {
-          links.forEach((l) => l.classList.remove('active'));
-          const i = secs.indexOf(e.target as HTMLElement);
-          if (i >= 0) links[i].classList.add('active');
-        }
+  const links = Array.from(
+    document.querySelectorAll<HTMLAnchorElement>('aside .nav a[data-nav]'),
+  );
+  const entries = links.flatMap((link) => {
+    const section = document.getElementById(link.dataset.nav!);
+    return section ? [{ link, section }] : [];
+  });
+  const stickyHeader = document.querySelector<HTMLElement>('header.top');
+
+  if (entries.length) {
+    let activeIndex = entries.findIndex(({ link }) => link.classList.contains('active'));
+    let frame: number | null = null;
+
+    const setActive = (nextIndex: number) => {
+      if (nextIndex === activeIndex) return;
+      entries.forEach(({ link }, index) => {
+        link.classList.toggle('active', index === nextIndex);
       });
-    }, { rootMargin: '-35% 0px -60% 0px' });
-    secs.forEach((s) => obs.observe(s));
+      activeIndex = nextIndex;
+    };
+
+    const updateActive = () => {
+      frame = null;
+      const viewportBottom = window.scrollY + window.innerHeight;
+      const documentBottom = document.documentElement.scrollHeight;
+      if (viewportBottom >= documentBottom - 1) {
+        setActive(entries.length - 1);
+        return;
+      }
+
+      // 与 section.article 的 scroll-margin-top 配合，避开 sticky header。
+      const activationLine = (stickyHeader?.getBoundingClientRect().bottom ?? 0) + 24;
+      let nextIndex = 0;
+      for (let index = 0; index < entries.length; index += 1) {
+        if (entries[index].section.getBoundingClientRect().top > activationLine) break;
+        nextIndex = index;
+      }
+      setActive(nextIndex);
+    };
+
+    const scheduleUpdate = () => {
+      if (frame === null) frame = window.requestAnimationFrame(updateActive);
+    };
+    const cleanup = () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      frame = null;
+      window.removeEventListener('scroll', scheduleUpdate);
+      window.removeEventListener('resize', scheduleUpdate);
+      window.removeEventListener('hashchange', scheduleUpdate);
+      window.removeEventListener('pagehide', cleanup);
+    };
+
+    window.addEventListener('scroll', scheduleUpdate, { passive: true });
+    window.addEventListener('resize', scheduleUpdate);
+    window.addEventListener('hashchange', scheduleUpdate);
+    window.addEventListener('pagehide', cleanup, { once: true });
+    scheduleUpdate();
   }
 </script>

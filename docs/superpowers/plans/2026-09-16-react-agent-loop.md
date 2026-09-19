@@ -486,7 +486,7 @@
 
   Expected: every isolation assertion passes. If Docker daemon is unavailable, report the blocker; do not replace it with host execution.
 
-- [ ] **Step 4: Run browser verification**
+- [x] **Step 4: Run browser verification**
 
   Start `npm run preview`; use Playwright to verify:
 
