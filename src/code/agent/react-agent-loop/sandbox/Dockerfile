@@ -3,7 +3,10 @@ FROM python:3.12.11-slim-bookworm@sha256:519591d6871b7bc437060736b9f7456b8731f14
 WORKDIR /app
 RUN python -m pip install --no-cache-dir uv==0.11.6
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+# The dev group ships pytest, which the sandbox allowlists as a tool the agent
+# may run inside /workspace; without it the allowlist would name a command the
+# image does not contain.
+RUN uv sync --frozen --group dev --no-install-project
 
 FROM python:3.12.11-slim-bookworm@sha256:519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7
 

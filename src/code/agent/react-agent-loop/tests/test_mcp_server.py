@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -20,7 +21,7 @@ def tools(tmp_path: Path) -> WorkspaceTools:
     return WorkspaceTools(
         root=workspace,
         skills_root=skills,
-        command_allowlist={"python"},
+        command_allowlist={sys.executable},
         timeout_seconds=1,
         max_output_bytes=1_024,
     )

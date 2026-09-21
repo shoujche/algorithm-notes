@@ -27,7 +27,11 @@ def _parser() -> argparse.ArgumentParser:
     decision.add_argument("--approve", action="store_true")
     decision.add_argument("--reject", metavar="REASON")
     parser.add_argument("--edit-arguments", metavar="JSON")
-    parser.add_argument("--workspace", type=Path, default=Path.cwd())
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        default=Path(__file__).with_name("workspace"),
+    )
     parser.add_argument(
         "--skills",
         type=Path,
@@ -39,6 +43,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 async def _run(args: argparse.Namespace) -> RunOutcome:
+    edited = _validated_decision(args)
     parameters = DockerMCPTransport().parameters(args.workspace, args.skills)
     async with stdio_client(parameters) as (read_stream, write_stream):
         async with ClientSession(read_stream, write_stream) as session:
@@ -51,20 +56,11 @@ async def _run(args: argparse.Namespace) -> RunOutcome:
                 model=args.model,
             )
             if args.resume is None:
-                if not args.user_input:
-                    raise ValueError("user_input is required for a new run")
                 return await agent.start(args.user_input)
 
             state = checkpoints.load(args.resume)
             if state is None or state.pending_approval is None:
                 raise ValueError("resume run has no pending approval")
-            if not args.approve and args.reject is None:
-                raise ValueError("--approve or --reject is required with --resume")
-            edited = (
-                _json_object(args.edit_arguments)
-                if args.edit_arguments is not None
-                else None
-            )
             return await agent.resume(
                 args.resume,
                 ResumeDecision(
@@ -74,6 +70,25 @@ async def _run(args: argparse.Namespace) -> RunOutcome:
                     arguments=edited,
                 ),
             )
+
+
+def _validated_decision(args: argparse.Namespace) -> dict[str, Any] | None:
+    """Check every argument before any Docker or model dependency is built."""
+    if args.resume is None:
+        if not args.user_input:
+            raise ValueError("user_input is required for a new run")
+        if args.approve or args.reject is not None:
+            raise ValueError("--approve and --reject require --resume")
+        if args.edit_arguments is not None:
+            raise ValueError("--edit-arguments requires --resume")
+        return None
+    if args.user_input:
+        raise ValueError("user_input cannot be combined with --resume")
+    if not args.approve and args.reject is None:
+        raise ValueError("--approve or --reject is required with --resume")
+    if args.edit_arguments is None:
+        return None
+    return _json_object(args.edit_arguments)
 
 
 def _json_object(raw: str) -> dict[str, Any]:

@@ -67,7 +67,11 @@ def build_parser() -> argparse.ArgumentParser:
         decision.add_argument("--approve", action="store_true")
         decision.add_argument("--reject", metavar="REASON")
         decision.add_argument("--edit-json", type=Path, metavar="FILE")
-        command.add_argument("--workspace", type=Path, default=Path.cwd())
+        command.add_argument(
+            "--workspace",
+            type=Path,
+            default=Path(__file__).with_name("workspace"),
+        )
         command.add_argument(
             "--skills",
             type=Path,

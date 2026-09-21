@@ -12,8 +12,12 @@ src/code/agent/react-agent-loop/.venv/
 .astro/
 
 # ReAct Agent runtime state
+# The default workspace directory itself is tracked (via .gitkeep) so the
+# documented commands find an existing mount source after a fresh checkout;
+# everything the agent writes into it stays out of the repository.
 src/code/agent/react-agent-loop/.runs/
-src/code/agent/react-agent-loop/workspace/
+src/code/agent/react-agent-loop/workspace/*
+!src/code/agent/react-agent-loop/workspace/.gitkeep
 
 # env
 .env

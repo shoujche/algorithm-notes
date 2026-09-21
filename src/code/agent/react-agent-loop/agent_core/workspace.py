@@ -19,10 +19,16 @@ _MAX_PATH_BYTES = 4_096
 _MAX_ARGUMENT_BYTES = 4_096
 _MAX_COMMAND_INPUT_BYTES = 16_384
 _MAX_LIST_ENTRIES = 1_000
+# The directories the sandbox image really ships, in trust order. Not
+# `os.defpath` ("/bin:/usr/bin"), which contains neither the image's virtualenv
+# nor the /usr/local/bin the base image installs CPython into, so every
+# allowlisted command would fail to launch. Entries must stay absolute and
+# non-empty: an empty entry is "the current directory", and the current
+# directory of a command is the agent's own workspace.
+_TRUSTED_COMMAND_PATH = "/app/.venv/bin:/usr/local/bin:/usr/bin:/bin"
 _MINIMAL_ENV = {
     "LANG": "C.UTF-8",
     "LC_ALL": "C.UTF-8",
-    "PATH": os.defpath,
 }
 
 
@@ -34,6 +40,7 @@ class WorkspaceTools:
         command_allowlist: set[str] | frozenset[str],
         timeout_seconds: float,
         max_output_bytes: int,
+        command_path: str = _TRUSTED_COMMAND_PATH,
     ) -> None:
         if root.is_symlink() or not root.is_dir():
             raise ValueError("workspace root must be a non-symlink directory")
@@ -46,13 +53,74 @@ class WorkspaceTools:
 
         self._root = root.resolve()
         self._skills_root = skills_root.resolve()
-        self._command_allowlist = frozenset(command_allowlist)
         self._timeout_seconds = timeout_seconds
         self._max_output_bytes = max_output_bytes
+        self._command_path = command_path
+        self._commands = self._resolve_commands(command_allowlist, command_path)
 
     @property
     def max_output_bytes(self) -> int:
         return self._max_output_bytes
+
+    def _resolve_commands(
+        self,
+        command_allowlist: set[str] | frozenset[str],
+        command_path: str,
+    ) -> dict[str, str]:
+        entries = command_path.split(os.pathsep)
+        if any(not entry for entry in entries):
+            raise ValueError("command PATH must not contain empty entries")
+        directories = [Path(entry) for entry in entries]
+        if any(not directory.is_absolute() for directory in directories):
+            raise ValueError("command PATH must contain only absolute directories")
+        return {
+            name: self._resolve_command(name, directories)
+            for name in command_allowlist
+        }
+
+    def _resolve_command(self, name: str, directories: list[Path]) -> str:
+        if not isinstance(name, str) or not name or "\0" in name:
+            raise ValueError("command allowlist entries must be non-empty strings")
+        candidate = Path(name)
+        if candidate.is_absolute():
+            candidates = [candidate]
+        elif "/" in name:
+            raise ValueError(
+                f"relative command allowlist entry must be a bare name: {name}"
+            )
+        else:
+            candidates = [directory / name for directory in directories]
+
+        for entry in candidates:
+            if not entry.is_symlink() and not entry.exists():
+                continue
+            return self._checked_executable(name, entry)
+        raise ValueError(
+            f"allowlisted command is not available on the trusted PATH: {name}"
+        )
+
+    def _checked_executable(self, name: str, candidate: Path) -> str:
+        try:
+            resolved = candidate.resolve(strict=True)
+            metadata = resolved.stat()
+        except OSError as error:
+            raise ValueError(
+                f"allowlisted command is not available on the trusted PATH: {name}"
+            ) from error
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(f"allowlisted command is not a regular file: {name}")
+        if not os.access(resolved, os.X_OK):
+            raise ValueError(f"allowlisted command is not executable: {name}")
+        if resolved == self._root or resolved.is_relative_to(self._root):
+            raise ValueError(
+                f"allowlisted command must not resolve inside the workspace: {name}"
+            )
+        # Dispatching the canonical target, not the name or the link, is what
+        # makes the checks above binding at exec time. The cost: a virtualenv
+        # `python` symlink canonicalizes to the base interpreter and so loses
+        # the virtualenv, which is why `pytest` is allowlisted in its own right
+        # rather than reached through `python -m pytest`.
+        return str(resolved)
 
     async def list_files(self, path: str = ".") -> dict[str, Any]:
         parts = self._workspace_parts(path)
@@ -179,8 +247,9 @@ class WorkspaceTools:
         if not command_cwd.is_dir():
             raise ValueError("command cwd must be a workspace directory")
 
+        dispatch_argv = [self._commands[normalized_argv[0]], *normalized_argv[1:]]
         stdout_bytes, stderr_bytes, exit_code, timed_out, truncated = (
-            self._run_bounded_process(normalized_argv, command_cwd)
+            self._run_bounded_process(dispatch_argv, command_cwd)
         )
         stdout, stderr = self._decode_bounded_outputs(stdout_bytes, stderr_bytes)
         return self._command_result(
@@ -356,7 +425,7 @@ class WorkspaceTools:
             raise ValueError(
                 f"command argument exceeds {_MAX_ARGUMENT_BYTES}-byte limit"
             )
-        if normalized[0] not in self._command_allowlist:
+        if normalized[0] not in self._commands:
             raise ValueError("executable is not in the command allowlist")
         input_size = sum(len(argument.encode("utf-8")) for argument in normalized)
         if input_size > _MAX_COMMAND_INPUT_BYTES:
@@ -407,7 +476,7 @@ class WorkspaceTools:
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=_MINIMAL_ENV,
+            env={**_MINIMAL_ENV, "PATH": self._command_path},
             start_new_session=True,
             close_fds=True,
         )

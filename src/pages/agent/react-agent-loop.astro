@@ -242,17 +242,19 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
           <li><span class="s">01</span><span>策略判定：<kbd>run_command</kbd> 属于 approval，<b>先暂停等人批准</b></span></li>
           <li><span class="s">02</span><span>参数按 strict schema 校验：argv 是字符串数组，<b>长度、条数、总字节都有上限</b></span></li>
           <li><span class="s">03</span><span>容器内再查一次：首元素在<b>允许清单</b>内，cwd 必须是 workspace 里的目录</span></li>
-          <li><span class="s">04</span><span><kbd>subprocess</kbd> 以 <b>shell=False + 独立进程组 + 最小环境变量</b>启动</span></li>
-          <li><span class="s">05</span><span>输出边读边计数，<b>超时或超量就杀掉整个进程组</b>并标记 truncated</span></li>
+          <li><span class="s">04</span><span>取启动时就解析好的<b>绝对真实路径</b>——清单里的名字只按<b>写死的可信 PATH</b>查找，运行时不再查 PATH</span></li>
+          <li><span class="s">05</span><span><kbd>subprocess</kbd> 以 <b>shell=False + 独立进程组 + 最小环境变量</b>启动</span></li>
+          <li><span class="s">06</span><span>输出边读边计数，<b>超时或超量就杀掉整个进程组</b>并标记 truncated</span></li>
         </ol>
-        <h4 class="sub">真实代码 · 镜像、启动参数与两处校验</h4>
-        <p>四个标签是同一道边界的四个侧面。镜像固定到 digest、以 uid 10001 运行；<kbd>build_argv</kbd> 里每一个开关都对应上面列的一条约束；路径校验靠逐级 <kbd>openat</kbd> 而不是字符串拼接，避免解析与打开之间被换成软链接。</p>
+        <h4 class="sub">真实代码 · 镜像、启动参数与三处校验</h4>
+        <p>五个标签是同一道边界的五个侧面。镜像固定到 digest、以 uid 10001 运行；<kbd>build_argv</kbd> 里每一个开关都对应上面列的一条约束；路径校验靠逐级 <kbd>openat</kbd> 而不是字符串拼接，避免解析与打开之间被换成软链接；命令解析在启动时一次做完，清单里每个名字都必须在可信 PATH 上落到一个真实的、可执行的普通文件，否则直接拒绝启动。</p>
         <CodeTabs variants={sandboxVariants} dir={CODE_DIR} />
         <h4 class="sub">故障点</h4>
         <ul class="fail">
           <li><b>让 MCP Server 跑在宿主上</b>：那它执行的每条命令都是宿主命令，容器等于没加。</li>
           <li><b>接受 shell 字符串</b>：只要出现管道、重定向、<kbd>&amp;&amp;</kbd>，允许清单立刻失效。argv 数组是唯一安全的形状。</li>
           <li><b>只用 resolve() 判断路径</b>：检查与打开之间存在时间窗，软链接可以在这中间被换掉。要用 <kbd>O_NOFOLLOW</kbd> 逐级打开。</li>
+          <li><b>执行时才去查 PATH</b>：拿 <kbd>os.defpath</kbd>（就是 <kbd>/bin:/usr/bin</kbd>）当最小环境的 PATH，漏掉了镜像真正装 CPython 的 <kbd>/usr/local/bin</kbd> 和装 pytest 的 venv——允许清单里三个名字一个都起不来。而随手拼一个带空项的 PATH 更糟：空项按 POSIX 就是「当前目录」，命令的当前目录正是 workspace，模型往里写一个同名可执行就顶替了清单里的程序。所以 PATH 写死、空项拒绝，名字在启动时一次解析成绝对路径。</li>
           <li><b>把 OPENAI_API_KEY 传进容器</b>：工具完全不需要它。容器 env 传空，凭据只留在宿主的模型客户端。</li>
           <li><b>忘了输出上限</b>：一条 <kbd>cat</kbd> 大文件就能把上下文和内存一起打满。</li>
         </ul>

@@ -32,6 +32,9 @@ _COMMAND = types.ToolAnnotations(
     idempotentHint=False,
     openWorldHint=False,
 )
+# Every name here must really exist on the image's trusted PATH; the sandbox
+# resolves them to absolute executables at startup and refuses to serve if not.
+_DEFAULT_COMMAND_ALLOWLIST = ("python", "python3", "pytest")
 
 
 def create_server(workspace: WorkspaceTools) -> Server[Any]:
@@ -163,7 +166,7 @@ def _default_workspace() -> WorkspaceTools:
         executable.strip()
         for executable in os.environ.get(
             "MCP_COMMAND_ALLOWLIST",
-            "python,python3,pytest",
+            ",".join(_DEFAULT_COMMAND_ALLOWLIST),
         ).split(",")
         if executable.strip()
     )

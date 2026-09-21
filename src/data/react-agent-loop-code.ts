@@ -124,12 +124,19 @@ export const workspaceArgvCheck = block(
   workspaceSource,
   '    def _validate_argv(self, argv: Sequence[str]) -> list[str]:',
 );
+/** 允许清单在启动时就按写死的可信 PATH 解析成绝对真实路径，运行时不再查 PATH */
+export const workspaceCommandResolution = excerpt(
+  workspaceSource,
+  '    def _resolve_commands(',
+  '        return str(resolved)',
+);
 
 export const sandboxVariants: CodeVariant[] = [
   { lang: 'docker', label: '容器镜像', file: 'sandbox/Dockerfile', code: dockerfile },
   { lang: 'python', label: '启动参数', file: 'agent_core/sandbox.py', code: sandboxArgv },
   { lang: 'python', label: '路径校验', file: 'agent_core/workspace.py', code: workspaceDirFd },
   { lang: 'python', label: '命令校验', file: 'agent_core/workspace.py', code: workspaceArgvCheck },
+  { lang: 'python', label: '命令解析', file: 'agent_core/workspace.py', code: workspaceCommandResolution },
 ];
 
 // ===== 06 纯 OpenAI SDK 手写循环 =====
