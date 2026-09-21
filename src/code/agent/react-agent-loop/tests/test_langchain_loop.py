@@ -103,6 +103,29 @@ class FailingMCP(FakeLangChainMCP):
         raise RuntimeError("sandbox unavailable")
 
 
+class ErrorEnvelopeMCP(FakeLangChainMCP):
+    async def call(self, name: str, arguments: dict[str, Any]) -> str:
+        self.calls.append((name, arguments))
+        return json.dumps(
+            {
+                "is_error": True,
+                "content": {"message": "tool reported failure"},
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
+
+class MalformedEnvelopeMCP(FakeLangChainMCP):
+    async def call(self, name: str, arguments: dict[str, Any]) -> str:
+        self.calls.append((name, arguments))
+        return json.dumps(
+            {"is_error": "yes", "content": {"message": "invalid flag"}},
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
+
 class DefinitionMCP(FakeLangChainMCP):
     def __init__(self, definitions: list[dict[str, Any]]) -> None:
         super().__init__()
@@ -1294,6 +1317,152 @@ async def test_tool_failure_becomes_controlled_observation(tmp_path) -> None:
     assert isinstance(failure, ToolMessage)
     assert failure.status == "error"
     assert "sandbox unavailable" in str(failure.content)
+
+
+@pytest.mark.asyncio
+async def test_read_error_envelope_is_an_error_observation_without_retry(
+    tmp_path,
+) -> None:
+    agent, model, mcp = make_agent(
+        tmp_path,
+        [
+            tool_call("call-read", "read_file", {"path": "missing.py"}),
+            AIMessage(content="could not inspect"),
+        ],
+        mcp=ErrorEnvelopeMCP(),
+        max_tool_retries=2,
+    )
+
+    outcome = await agent.start("inspect")
+
+    assert outcome.final_text == "could not inspect"
+    assert mcp.calls == [("read_file", {"path": "missing.py"})]
+    failure = model.seen_messages[1][-1]
+    assert isinstance(failure, ToolMessage)
+    assert failure.status == "error"
+    assert json.loads(str(failure.content)) == {
+        "content": {"message": "tool reported failure"},
+        "is_error": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_sensitive_error_envelope_finishes_failed_without_retry(
+    tmp_path,
+) -> None:
+    checkpoint_path = tmp_path / "langchain.sqlite"
+    agent, model, mcp = make_agent(
+        tmp_path,
+        [
+            tool_call(
+                "call-write",
+                "write_file",
+                {"path": "b.py", "content": "new"},
+            ),
+            AIMessage(content="manual check required"),
+        ],
+        mcp=ErrorEnvelopeMCP(),
+        max_tool_retries=2,
+    )
+    pending = await agent.start("change")
+
+    outcome = await agent.resume(
+        "run-1",
+        ResumeDecision(
+            action="approve",
+            digest=pending.pending_approval.digest,
+        ),
+    )
+
+    assert outcome.final_text == "manual check required"
+    assert mcp.calls == [
+        ("write_file", {"path": "b.py", "content": "new"})
+    ]
+    assert SideEffectLedger(
+        checkpoint_path.with_name(f"{checkpoint_path.name}.side-effects.json")
+    ).status("run-1", "call-write") == "failed"
+    failure_message = model.seen_messages[1][-1]
+    assert isinstance(failure_message, ToolMessage)
+    assert failure_message.status == "error"
+    failure = json.loads(str(failure_message.content))
+    assert failure["error"] == "side_effect_tool_error"
+    assert failure["status"] == "failed"
+    assert failure["content"] == {
+        "content": {"message": "tool reported failure"},
+        "is_error": True,
+    }
+    assert "not retried" in failure["action_required"]
+
+
+@pytest.mark.asyncio
+async def test_sensitive_error_finish_durability_failure_stays_uncertain(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    checkpoint_path = tmp_path / "langchain.sqlite"
+    ledger_path = checkpoint_path.with_name(
+        f"{checkpoint_path.name}.side-effects.json"
+    )
+    agent, model, mcp = make_agent(
+        tmp_path,
+        [
+            tool_call(
+                "call-write",
+                "write_file",
+                {"path": "b.py", "content": "new"},
+            ),
+            AIMessage(content="manual reconciliation required"),
+        ],
+        mcp=ErrorEnvelopeMCP(),
+        max_tool_retries=2,
+    )
+    pending = await agent.start("change")
+    _fail_durability_flush_for(monkeypatch, ledger_path, skip=1)
+
+    outcome = await agent.resume(
+        "run-1",
+        ResumeDecision(
+            action="approve",
+            digest=pending.pending_approval.digest,
+        ),
+    )
+
+    assert outcome.final_text == "manual reconciliation required"
+    assert mcp.calls == [
+        ("write_file", {"path": "b.py", "content": "new"})
+    ]
+    assert SideEffectLedger(ledger_path).status("run-1", "call-write") == "failed"
+    uncertain_message = model.seen_messages[1][-1]
+    assert isinstance(uncertain_message, ToolMessage)
+    assert uncertain_message.status == "error"
+    uncertain = json.loads(str(uncertain_message.content))
+    assert uncertain["error"] == "side_effect_status_uncertain"
+    assert uncertain["status"] == "failed"
+    assert "not retried" in uncertain["action_required"]
+
+
+@pytest.mark.asyncio
+async def test_malformed_read_envelope_fails_closed_without_retry(tmp_path) -> None:
+    agent, model, mcp = make_agent(
+        tmp_path,
+        [
+            tool_call("call-read", "read_file", {"path": "a.py"}),
+            AIMessage(content="protocol failure"),
+        ],
+        mcp=MalformedEnvelopeMCP(),
+        max_tool_retries=2,
+    )
+
+    outcome = await agent.start("inspect")
+
+    assert outcome.final_text == "protocol failure"
+    assert mcp.calls == [("read_file", {"path": "a.py"})]
+    failure = model.seen_messages[1][-1]
+    assert isinstance(failure, ToolMessage)
+    assert failure.status == "error"
+    parsed = json.loads(str(failure.content))
+    assert parsed["error"] == "malformed_mcp_result"
+    assert "invalid result envelope" in parsed["detail"]
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,17 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
+
+
+@dataclass(frozen=True)
+class MCPToolResult:
+    """A validated MCPToolClient.call JSON result envelope."""
+
+    is_error: bool
+    content: Any
+    envelope: dict[str, Any]
 
 
 class MCPToolClient:
@@ -50,6 +60,34 @@ class MCPToolClient:
             separators=(",", ":"),
             allow_nan=False,
         )
+
+
+def decode_mcp_tool_result(result: Any) -> MCPToolResult:
+    """Decode the exact JSON envelope emitted by ``MCPToolClient.call``."""
+    if not isinstance(result, str):
+        raise TypeError("MCP adapter results must be JSON strings")
+    try:
+        payload = json.loads(
+            result,
+            parse_constant=_reject_json_constant,
+        )
+    except json.JSONDecodeError as error:
+        raise ValueError("MCP adapter returned invalid JSON") from error
+    if not isinstance(payload, Mapping) or set(payload) != {"is_error", "content"}:
+        raise ValueError("MCP adapter returned an invalid result envelope")
+    is_error = payload["is_error"]
+    if not isinstance(is_error, bool):
+        raise ValueError("MCP adapter returned an invalid result envelope")
+    envelope = {"is_error": is_error, "content": payload["content"]}
+    return MCPToolResult(
+        is_error=is_error,
+        content=payload["content"],
+        envelope=envelope,
+    )
+
+
+def _reject_json_constant(value: str) -> Any:
+    raise ValueError(f"invalid JSON constant: {value}")
 
 
 def validate_function_tools(

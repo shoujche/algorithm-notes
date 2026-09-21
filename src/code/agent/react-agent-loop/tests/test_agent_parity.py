@@ -65,11 +65,14 @@ class EventMCP:
         self.events.append(event)
         return json.dumps(
             {
-                "list_skills": {"skills": ["workspace-helper"]},
-                "read_skill": {"content": "Use workspace tools safely."},
-                "read_file": {"content": "old"},
-                "write_file": {"written": True},
-            }[name],
+                "is_error": False,
+                "content": {
+                    "list_skills": {"skills": ["workspace-helper"]},
+                    "read_skill": {"content": "Use workspace tools safely."},
+                    "read_file": {"content": "old"},
+                    "write_file": {"written": True},
+                }[name],
+            },
             separators=(",", ":"),
             sort_keys=True,
         )

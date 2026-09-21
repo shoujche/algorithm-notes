@@ -33,7 +33,7 @@ from langgraph.types import Command, interrupt
 
 from .checkpoints import contains_secret
 from .contracts import ApprovalRequest, Risk, RunOutcome, ToolProposal, to_json_value
-from .mcp_adapter import validate_function_tools
+from .mcp_adapter import decode_mcp_tool_result, validate_function_tools
 from .openai_loop import ResumeDecision
 from .policy import ToolPolicy, digests_match
 
@@ -589,9 +589,27 @@ class LangChainReActAgent:
                 _tool_name: str = name,
                 _risk: Risk = risk,
                 **arguments: Any,
-            ) -> str:
+            ) -> ToolMessage:
                 if _risk is Risk.READ_ONLY:
-                    return await self._mcp.call(_tool_name, arguments)
+                    result = await self._mcp.call(_tool_name, arguments)
+                    try:
+                        decoded = decode_mcp_tool_result(result)
+                    except (TypeError, ValueError) as error:
+                        return _tool_message(
+                            runtime,
+                            _tool_name,
+                            _observation(
+                                error="malformed_mcp_result",
+                                detail=str(error),
+                            ),
+                            error=True,
+                        )
+                    return _tool_message(
+                        runtime,
+                        _tool_name,
+                        _json_value(decoded.envelope),
+                        error=decoded.is_error,
+                    )
                 if runtime.tool_call_id is None:
                     raise ValueError("side-effect tool call has no call ID")
                 run_id = _required_string(
@@ -601,52 +619,122 @@ class LangChainReActAgent:
                 tool_call_id = runtime.tool_call_id
                 claim = self._side_effects.claim(run_id, tool_call_id)
                 if claim.outcome is ClaimOutcome.FINISHED:
-                    return _observation(
-                        error="duplicate_side_effect_call",
-                        status=claim.status,
-                        detail="this call already finished and is not repeated",
+                    return _tool_message(
+                        runtime,
+                        _tool_name,
+                        _observation(
+                            error="duplicate_side_effect_call",
+                            status=claim.status,
+                            detail="this call already finished and is not repeated",
+                        ),
+                        error=True,
                     )
                 if claim.outcome is ClaimOutcome.UNCONFIRMED:
-                    return _observation(
-                        error="side_effect_status_uncertain",
-                        status=claim.status,
-                        detail=(
-                            "the call is claimed but never finished, so "
-                            "whether the side effect ran is unconfirmed"
+                    return _tool_message(
+                        runtime,
+                        _tool_name,
+                        _observation(
+                            error="side_effect_status_uncertain",
+                            status=claim.status,
+                            detail=(
+                                "the call is claimed but never finished, so "
+                                "whether the side effect ran is unconfirmed"
+                            ),
+                            action_required=(
+                                "check the target system by hand and reconcile "
+                                "the ledger; this call is never dispatched again "
+                                "automatically"
+                            ),
                         ),
-                        action_required=(
-                            "check the target system by hand and reconcile "
-                            "the ledger; this call is never dispatched again "
-                            "automatically"
-                        ),
+                        error=True,
                     )
                 try:
                     result = await self._mcp.call(_tool_name, arguments)
+                    decoded = decode_mcp_tool_result(result)
                 except Exception as error:
-                    self._side_effects.finish(run_id, tool_call_id, "failed")
-                    return _observation(
-                        error="side_effect_outcome_uncertain",
-                        status="failed",
-                        detail=str(error),
-                        action_required=(
-                            "check the target system by hand; this call is "
-                            "not retried automatically"
+                    durable = self._side_effects.finish(
+                        run_id,
+                        tool_call_id,
+                        "failed",
+                    )
+                    return _tool_message(
+                        runtime,
+                        _tool_name,
+                        _observation(
+                            error=(
+                                "side_effect_outcome_uncertain"
+                                if durable
+                                else "side_effect_status_uncertain"
+                            ),
+                            status="failed",
+                            detail=str(error),
+                            action_required=(
+                                "check the target system and ledger by hand; "
+                                "this call is not retried automatically"
+                            ),
                         ),
+                        error=True,
+                    )
+                if decoded.is_error:
+                    if not self._side_effects.finish(
+                        run_id,
+                        tool_call_id,
+                        "failed",
+                    ):
+                        return _tool_message(
+                            runtime,
+                            _tool_name,
+                            _observation(
+                                error="side_effect_status_uncertain",
+                                status="failed",
+                                detail=(
+                                    "the tool reported failure but its ledger "
+                                    "record is not confirmed durable"
+                                ),
+                                action_required=(
+                                    "check the target system and ledger by hand; "
+                                    "this call is not retried automatically"
+                                ),
+                            ),
+                            error=True,
+                        )
+                    return _tool_message(
+                        runtime,
+                        _tool_name,
+                        _observation(
+                            error="side_effect_tool_error",
+                            status="failed",
+                            content=decoded.envelope,
+                            action_required=(
+                                "check the target system by hand; this call is "
+                                "not retried automatically"
+                            ),
+                        ),
+                        error=True,
                     )
                 if not self._side_effects.finish(run_id, tool_call_id, "executed"):
-                    return _observation(
-                        error="side_effect_status_uncertain",
-                        status="executed",
-                        detail=(
-                            "the side effect ran but its finished ledger "
-                            "record is not confirmed durable"
+                    return _tool_message(
+                        runtime,
+                        _tool_name,
+                        _observation(
+                            error="side_effect_status_uncertain",
+                            status="executed",
+                            detail=(
+                                "the side effect ran but its finished ledger "
+                                "record is not confirmed durable"
+                            ),
+                            action_required=(
+                                "check the ledger by hand; this call is not "
+                                "retried automatically"
+                            ),
                         ),
-                        action_required=(
-                            "check the ledger by hand; this call is not "
-                            "retried automatically"
-                        ),
+                        error=True,
                     )
-                return result
+                return _tool_message(
+                    runtime,
+                    _tool_name,
+                    _json_value(decoded.envelope),
+                )
 
             tools.append(
                 StructuredTool.from_function(
@@ -737,8 +825,35 @@ def _config(run_id: str) -> dict[str, dict[str, str]]:
     return {"configurable": {"thread_id": run_id}}
 
 
-def _observation(**fields: str) -> str:
+def _observation(**fields: Any) -> str:
     return json.dumps(fields, sort_keys=True, separators=(",", ":"))
+
+
+def _json_value(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def _tool_message(
+    runtime: ToolRuntime,
+    name: str,
+    content: str,
+    *,
+    error: bool = False,
+) -> ToolMessage:
+    if runtime.tool_call_id is None:
+        raise ValueError("tool call has no call ID")
+    return ToolMessage(
+        content=content,
+        name=name,
+        tool_call_id=runtime.tool_call_id,
+        status="error" if error else "success",
+    )
 
 
 def _to_outcome(

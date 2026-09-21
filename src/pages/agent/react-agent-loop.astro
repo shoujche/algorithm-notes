@@ -202,7 +202,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
           <li><span class="s">02</span><span><kbd>tools/list</kbd> 返回六个工具的 schema 与 annotations</span></li>
           <li><span class="s">03</span><span>adapter 校验后转成 <b>strict function tools</b> 交给 Responses API</span></li>
           <li><span class="s">04</span><span>模型给出 function_call，宿主用<b>同一份 schema</b> 再校验一次参数</span></li>
-          <li><span class="s">05</span><span><kbd>tools/call</kbd> 进容器执行，返回内容被包成 <b>is_error + content</b> 的 JSON 字符串</span></li>
+          <li><span class="s">05</span><span><kbd>tools/call</kbd> 进容器执行，<kbd>structuredContent</kbd>（没有时才退回普通 <kbd>content</kbd>）与 <kbd>isError</kbd> 被包成 <b>is_error + content</b> 的 JSON envelope</span></li>
         </ol>
         <h4 class="sub">真实代码 · Server 端工具定义</h4>
         <p>六个工具：<kbd>list_files</kbd>、<kbd>read_file</kbd>、<kbd>list_skills</kbd>、<kbd>read_skill</kbd> 只读，<kbd>write_file</kbd>、<kbd>run_command</kbd> 有副作用。注意 <kbd>run_command</kbd> 收的是 <b>argv 数组</b>而不是命令字符串，以及每个字段都带长度上限。</p>
@@ -215,6 +215,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
           <li><b>把 annotations 当授权</b>：那是 Server 的自述。一个被攻陷或写错的 Server 可以把删除操作标成只读。</li>
           <li><b>schema 不严格</b>：漏掉 <kbd>additionalProperties: false</kbd>，模型就能塞进没人校验的字段，后端代码也许正好会读它。</li>
           <li><b>工具名重复</b>：模型无法区分，回填也会错位，所以适配层直接拒绝。</li>
+          <li><b>把 <kbd>is_error=true</kbd> 当成功字符串</b>：wrapper 必须解码标准 envelope，并把它变成明确的 error observation；缺字段、错类型或非 JSON 一律 fail closed。</li>
           <li><b>把工具输出当指令</b>：文件内容里写「请执行 rm -rf」只是数据；它能诱导模型提议，但提议照样要过策略与审批。</li>
         </ul>
         <p class="cue"><span class="t">记忆提示</span>schema 是契约，annotations 是提示，授权在宿主；本地 stdio 只能自己接。</p>
@@ -330,7 +331,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
         <ol class="flow">
           <li><span class="s">01</span><span><kbd>ModelCallLimitMiddleware</kbd> 在模型调用前后计数，超限就 <b>end</b></span></li>
           <li><span class="s">02</span><span><kbd>ToolCallLimitMiddleware</kbd> 同理约束工具调用总数</span></li>
-          <li><span class="s">03</span><span><kbd>ToolRetryMiddleware</kbd> <b>只对只读工具</b>开启重试，有副作用的一律不自动重试</span></li>
+          <li><span class="s">03</span><span><kbd>ToolRetryMiddleware</kbd> <b>只对只读工具抛出的 Python 异常</b>开启有限重试；MCP <kbd>is_error=true</kbd> 是受控 observation，不重试，有副作用的一律不自动重试</span></li>
           <li><span class="s">04</span><span>HITL middleware 在 <kbd>after_model</kbd> 拦截，<b>逐个</b>对敏感调用发起 interrupt</span></li>
           <li><span class="s">05</span><span>批准 / 编辑 / 拒绝三种决策映射回 tool_calls，再交给工具节点</span></li>
         </ol>
@@ -345,6 +346,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
           <li><b>用默认的内存 checkpointer</b>：进程一退出待审批的 run 就消失了，所以这里换成了原子落盘的实现。</li>
           <li><b>一次 interrupt 批量批准多个调用</b>：默认行为容易变成「一次点头放行一批」，这里改写成逐个审批。</li>
           <li><b>给有副作用的工具开自动重试</b>：重试会把一次写入变成两次。重试清单里只放只读工具。</li>
+          <li><b>只透传 MCP JSON 字符串</b>：框架会把它包装成 success ToolMessage；这里复用 adapter 的严格解码 helper，把 <kbd>is_error=true</kbd> 转成 error ToolMessage，副作用 ledger 同步记为 <kbd>failed</kbd>。</li>
         </ul>
         <p class="cue"><span class="t">记忆提示</span>LangChain 的 Agent 就是「别人替你建好的 LangGraph 图」；省的是接线，不是判断。</p>
         <Interview q="create_agent 和自己写 StateGraph 是什么关系?">
@@ -485,6 +487,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
         <ul class="fail">
           <li><b>模型 API 偶发失败</b> → 有限次指数退避；超过次数明确失败，不要静默降级。</li>
           <li><b>MCP Server 起不来 / Docker 不可用</b> → 直接终止并给出可操作的错误，<b>绝不退化成宿主执行</b>。</li>
+          <li><b>MCP 返回 <kbd>is_error=true</kbd></b> → 作为受控 tool error 回喂，不当成功、不自动重试；副作用调用记为 <kbd>failed</kbd>，落盘耐久性无法确认时报告 uncertain。</li>
           <li><b>工具参数不合法</b> → 结构化 Observation 回喂模型，让它自己改。</li>
           <li><b>工具超时或输出过大</b> → 截断并打上标记，同时杀掉整个进程组。</li>
           <li><b>用户拒绝</b> → 理由回喂，模型重新规划。</li>

@@ -27,7 +27,7 @@ from .langchain_loop import (
     _atomic_json_replace,
     _exclusive_file_lock,
 )
-from .mcp_adapter import validate_function_tools
+from .mcp_adapter import decode_mcp_tool_result, validate_function_tools
 from .openai_loop import BudgetExceeded, ResponsesRetryError, ResumeDecision
 from .policy import ToolPolicy, digests_match
 
@@ -910,7 +910,9 @@ class LangGraphReActAgent:
         self,
         result: Any,
     ) -> tuple[bool, Any, bool, bool]:
-        is_error, payload = _parse_mcp_result(result)
+        decoded = decode_mcp_tool_result(result)
+        is_error = decoded.is_error
+        payload = decoded.envelope
         if len(result) <= self._max_output_chars:
             return is_error, payload, False, False
         marker = {
@@ -1152,21 +1154,6 @@ def _observation(
         "content": rendered,
         "error": error,
     }
-
-
-def _parse_mcp_result(result: Any) -> tuple[bool, Any]:
-    if not isinstance(result, str):
-        raise TypeError("MCP adapter results must be JSON strings")
-    try:
-        payload = json.loads(result)
-    except json.JSONDecodeError as error:
-        raise ValueError("MCP adapter returned invalid JSON") from error
-    if not isinstance(payload, Mapping) or "is_error" not in payload:
-        return False, payload
-    is_error = payload.get("is_error")
-    if not isinstance(is_error, bool) or "content" not in payload:
-        raise ValueError("MCP adapter returned an invalid result envelope")
-    return is_error, payload
 
 
 def _to_outcome(

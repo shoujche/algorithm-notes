@@ -99,7 +99,13 @@ class FakeMCPClient:
     async def call(self, name: str, arguments: dict[str, Any]) -> str:
         self.calls.append((name, arguments))
         return __import__("json").dumps(
-            self.results.get(name, {"error": f"unknown tool: {name}"}),
+            {
+                "is_error": name not in self.results,
+                "content": self.results.get(
+                    name,
+                    {"error": f"unknown tool: {name}"},
+                ),
+            },
             separators=(",", ":"),
             sort_keys=True,
         )
