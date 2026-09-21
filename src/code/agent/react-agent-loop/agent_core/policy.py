@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import re
 from typing import Any
 
 from .contracts import ApprovalRequest, Risk, ToolProposal, to_json_value
 
 _READ_ONLY_TOOLS = frozenset({"list_files", "read_file", "list_skills", "read_skill"})
 _APPROVABLE_TOOLS = frozenset({"write_file", "run_command"})
+_DIGEST_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 def _canonical_json(value: Any) -> str:
@@ -27,6 +30,17 @@ def approval_digest(proposal: ToolProposal) -> str:
         "tool_name": proposal.tool_name,
     }
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def is_approval_digest(value: str) -> bool:
+    return _DIGEST_PATTERN.fullmatch(value) is not None
+
+
+def digests_match(expected: str, actual: str) -> bool:
+    return hmac.compare_digest(
+        expected.encode("utf-8", "surrogatepass"),
+        actual.encode("utf-8", "surrogatepass"),
+    )
 
 
 class ToolPolicy:

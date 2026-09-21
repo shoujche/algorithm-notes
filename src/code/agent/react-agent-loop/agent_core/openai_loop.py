@@ -12,7 +12,7 @@ from jsonschema.exceptions import SchemaError, ValidationError
 
 from .checkpoints import JsonCheckpointStore
 from .contracts import Risk, RunOutcome, RunState, ToolProposal, to_json_value
-from .policy import ToolPolicy
+from .policy import ToolPolicy, digests_match
 
 
 class BudgetExceeded(RuntimeError):
@@ -98,7 +98,7 @@ class OpenAIReActAgent:
             raise ValueError("run has no pending approval")
         if decision.action not in {"approve", "reject"}:
             raise ValueError("decision action must be approve or reject")
-        if decision.digest != pending.digest:
+        if not digests_match(decision.digest, pending.digest):
             raise ValueError("approval digest does not match pending proposal")
         if decision.action == "reject" and decision.arguments is not None:
             raise ValueError("a rejection cannot edit arguments")

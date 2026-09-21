@@ -35,7 +35,7 @@ from .checkpoints import contains_secret
 from .contracts import ApprovalRequest, Risk, RunOutcome, ToolProposal, to_json_value
 from .mcp_adapter import validate_function_tools
 from .openai_loop import ResumeDecision
-from .policy import ToolPolicy
+from .policy import ToolPolicy, digests_match
 
 
 class CheckpointDurabilityError(OSError):
@@ -527,7 +527,7 @@ class LangChainReActAgent:
                 raise ValueError("run has no pending approval")
             if decision.action not in {"approve", "reject"}:
                 raise ValueError("decision action must be approve or reject")
-            if decision.digest != pending.digest:
+            if not digests_match(decision.digest, pending.digest):
                 raise ValueError("approval digest does not match pending proposal")
             if decision.action == "reject" and decision.arguments is not None:
                 raise ValueError("a rejection cannot edit arguments")

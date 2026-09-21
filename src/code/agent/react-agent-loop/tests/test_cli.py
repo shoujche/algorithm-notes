@@ -11,6 +11,11 @@ import pytest
 import cli
 from agent_core.contracts import ApprovalRequest, Risk, RunOutcome, ToolProposal
 
+DIGEST = "0123456789abcdef" * 4
+FAKE_API_KEY = "sk-" + "0" * 32
+FAKE_BEARER = "Bearer " + "z" * 24
+FAKE_TOKEN = "not-a-real-token-value"
+
 
 class RecordingRunner:
     def __init__(self, outcome: RunOutcome) -> None:
@@ -168,31 +173,38 @@ def test_edit_json_is_an_approval_decision_and_reject_cannot_edit(
     assert runner.calls == []
 
 
+def paused(
+    tool_name: str,
+    arguments: dict[str, object],
+    preview: object,
+) -> RunOutcome:
+    approval = ApprovalRequest(
+        proposal=ToolProposal("call-1", tool_name, arguments),
+        risk=Risk.APPROVAL,
+        normalized_arguments="{}",
+        preview=preview,  # type: ignore[arg-type]
+        digest=DIGEST,
+    )
+    return RunOutcome(run_id="run-1", pending_approval=approval)
+
+
 def test_paused_outcome_has_readable_redacted_preview_and_exit_code(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
-    secret = "sk-" + "x" * 30
-    proposal = ToolProposal(
-        "call-write",
-        "write_file",
-        {"path": "answer.py", "content": f"OPENAI_API_KEY={secret}"},
-    )
-    approval = ApprovalRequest(
-        proposal=proposal,
-        risk=Risk.APPROVAL,
-        normalized_arguments="{}",
-        preview=f"OPENAI_API_KEY={secret}",
-        digest="digest",
-    )
+    content = f"OPENAI_API_KEY={FAKE_API_KEY}"
 
     code, _, output, error = invoke(
         monkeypatch,
         capsys,
         tmp_path,
         ["openai", "write the answer"],
-        outcome=RunOutcome(run_id="run-1", pending_approval=approval),
+        outcome=paused(
+            "write_file",
+            {"path": "answer.py", "content": content},
+            content,
+        ),
     )
 
     payload = json.loads(output)
@@ -203,8 +215,181 @@ def test_paused_outcome_has_readable_redacted_preview_and_exit_code(
     assert payload["approval"]["tool"] == "write_file"
     assert payload["approval"]["target"] == "answer.py"
     assert payload["approval"]["risk"] == "approval"
-    assert payload["approval"]["preview"] == "[REDACTED]"
-    assert secret not in output
+    assert payload["approval"]["digest"] == DIGEST
+    assert payload["approval"]["preview"] == "OPENAI_API_KEY=[REDACTED]"
+    assert FAKE_API_KEY not in output
+
+
+def test_write_content_stays_reviewable_around_an_embedded_secret(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    content = f"import os\ntoken: {FAKE_TOKEN}\nos.remove('/workspace/notes.md')"
+
+    code, _, output, _ = invoke(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        ["openai", "write the answer"],
+        outcome=paused(
+            "write_file",
+            {"path": "payload.py", "content": content},
+            content,
+        ),
+    )
+
+    approval = json.loads(output)["approval"]
+    assert code == 3
+    assert approval["target"] == "payload.py"
+    assert approval["arguments"]["path"] == "payload.py"
+    assert approval["arguments"]["content"] == (
+        "import os\ntoken: [REDACTED]\nos.remove('/workspace/notes.md')"
+    )
+    assert approval["preview"] == approval["arguments"]["content"]
+    assert FAKE_TOKEN not in output
+
+
+def test_run_command_argv_keeps_its_structure_and_surrounding_context(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    script = f"curl -H 'Authorization: {FAKE_BEARER}' https://example.invalid/x"
+    argv = ["bash", "-lc", script]
+
+    code, _, output, _ = invoke(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        ["openai", "run the command"],
+        outcome=paused(
+            "run_command",
+            {"argv": argv, "cwd": "/workspace"},
+            argv,
+        ),
+    )
+
+    approval = json.loads(output)["approval"]
+    assert code == 3
+    assert approval["target"] == "/workspace"
+    assert approval["arguments"]["argv"] == [
+        "bash",
+        "-lc",
+        "curl -H 'Authorization: [REDACTED]' https://example.invalid/x",
+    ]
+    assert approval["preview"] == approval["arguments"]["argv"]
+    assert FAKE_BEARER not in output
+
+
+def test_an_unlabelled_secret_literal_is_masked_span_by_span(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    content = f"# rotate {FAKE_API_KEY} before the demo"
+
+    code, _, output, _ = invoke(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        ["openai", "write the answer"],
+        outcome=paused(
+            "write_file",
+            {"path": "notes.md", "content": content},
+            content,
+        ),
+    )
+
+    approval = json.loads(output)["approval"]
+    assert code == 3
+    assert approval["preview"] == "# rotate [REDACTED] before the demo"
+    assert FAKE_API_KEY not in output
+
+
+def test_a_structured_value_behind_a_sensitive_key_is_masked_to_end_of_line(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    content = (
+        "region = 'eu'\n"
+        f'credentials: {{"user": "sre", "pass": "{FAKE_TOKEN}"}}\n'
+        "retries = 3"
+    )
+
+    code, _, output, _ = invoke(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        ["openai", "write the answer"],
+        outcome=paused(
+            "write_file",
+            {"path": "deploy.py", "content": content},
+            content,
+        ),
+    )
+
+    approval = json.loads(output)["approval"]
+    assert code == 3
+    assert approval["arguments"]["content"] == (
+        "region = 'eu'\ncredentials: [REDACTED]\nretries = 3"
+    )
+    assert FAKE_TOKEN not in output
+
+
+def test_sensitive_keys_mask_only_their_own_value(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    code, _, output, _ = invoke(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        ["openai", "write the answer"],
+        outcome=paused(
+            "write_file",
+            {
+                "path": "deploy.json",
+                "content": "keep this visible",
+                "api_key": FAKE_API_KEY,
+                "nested": {"authorization": FAKE_BEARER, "retries": 3},
+            },
+            "keep this visible",
+        ),
+    )
+
+    arguments = json.loads(output)["approval"]["arguments"]
+    assert code == 3
+    assert arguments["path"] == "deploy.json"
+    assert arguments["content"] == "keep this visible"
+    assert arguments["api_key"] == "[REDACTED]"
+    assert arguments["nested"] == {"authorization": "[REDACTED]", "retries": 3}
+    assert FAKE_API_KEY not in output
+    assert FAKE_BEARER not in output
+
+
+def test_unsupported_preview_values_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    code, _, output, _ = invoke(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        ["openai", "write the answer"],
+        outcome=paused(
+            "write_file",
+            {"path": "answer.py", "content": "hello"},
+            ["visible", object()],
+        ),
+    )
+
+    approval = json.loads(output)["approval"]
+    assert code == 3
+    assert approval["preview"] == ["visible", "[REDACTED]"]
 
 
 @pytest.mark.parametrize("implementation", ["openai", "langchain", "langgraph"])
@@ -532,3 +717,229 @@ def test_argument_validation_precedes_dependency_checks(
     assert "Docker" not in error
     assert "OPENAI_API_KEY" not in error
     assert runner.calls == []
+
+
+@pytest.mark.parametrize("implementation", ["openai", "langchain", "langgraph"])
+def test_approval_requires_an_expected_digest(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    implementation: str,
+) -> None:
+    code, runner, output, error = invoke(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        [implementation, "--resume", "run-1", "--approve"],
+    )
+
+    assert code == 2
+    assert output == ""
+    assert error.strip() == (
+        "error: --expect-digest is required to approve a paused approval"
+    )
+    assert runner.calls == []
+
+
+def test_edit_resume_requires_an_expected_digest(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    edit = tmp_path / "edit.json"
+    edit.write_text('{"path":"answer.py","content":"42"}', encoding="utf-8")
+
+    code, runner, _, error = invoke(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        ["langgraph", "--resume", "run-1", "--edit-json", str(edit)],
+    )
+
+    assert code == 2
+    assert error.strip() == (
+        "error: --expect-digest is required to approve a paused approval"
+    )
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize(
+    "digest",
+    [
+        "0123456789abcdef" * 3,
+        "0123456789ABCDEF" * 4,
+        "z" * 64,
+        ("0123456789abcdef" * 4) + "0",
+        "",
+    ],
+)
+def test_malformed_expected_digests_are_rejected_without_echoing_them(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    digest: str,
+) -> None:
+    code, runner, output, error = invoke(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        ["openai", "--resume", "run-1", "--approve", "--expect-digest", digest],
+    )
+
+    assert code == 2
+    assert output == ""
+    assert error.strip() == (
+        "error: --expect-digest must be 64 lowercase hexadecimal characters"
+    )
+    assert not digest or digest not in error
+    assert runner.calls == []
+
+
+def test_a_malformed_expected_digest_is_also_rejected_for_a_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    code, runner, _, error = invoke(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        ["openai", "--resume", "run-1", "--reject", "no", "--expect-digest", "abc"],
+    )
+
+    assert code == 2
+    assert error.strip() == (
+        "error: --expect-digest must be 64 lowercase hexadecimal characters"
+    )
+    assert runner.calls == []
+
+
+def test_expected_digest_requires_resume(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    code, runner, _, error = invoke(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        ["openai", "answer", "--expect-digest", DIGEST],
+    )
+
+    assert code == 2
+    assert error.strip() == "error: --expect-digest requires --resume"
+    assert runner.calls == []
+
+
+def test_rejection_may_omit_the_expected_digest(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    code, runner, _, error = invoke(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        ["openai", "--resume", "run-1", "--reject", "too risky"],
+    )
+
+    assert code == 0
+    assert error == ""
+    assert len(runner.calls) == 1
+    assert runner.calls[0][1].expect_digest is None
+
+
+@pytest.mark.parametrize("implementation", ["openai", "langchain", "langgraph"])
+def test_expected_digest_reaches_the_entrypoint_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    implementation: str,
+) -> None:
+    edit = tmp_path / "edit.json"
+    edit.write_text('{"path":"answer.py","content":"42"}', encoding="utf-8")
+
+    code, runner, _, error = invoke(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        [
+            implementation,
+            "--resume",
+            "run-1",
+            "--edit-json",
+            str(edit),
+            "--expect-digest",
+            DIGEST,
+        ],
+    )
+
+    forwarded = runner.calls[0][1]
+    assert code == 0
+    assert error == ""
+    assert forwarded.expect_digest == DIGEST
+    assert forwarded.approve is True
+    assert forwarded.edit_arguments == '{"content":"42","path":"answer.py"}'
+
+
+def test_expected_digest_validation_precedes_dependency_checks(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    code, runner, _, error = invoke(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        ["openai", "--resume", "run-1", "--approve"],
+        api_key="",
+        docker=None,
+    )
+
+    assert code == 2
+    assert "--expect-digest is required" in error
+    assert "Docker" not in error
+    assert "OPENAI_API_KEY" not in error
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize("implementation", ["openai", "langchain", "langgraph"])
+def test_usage_spells_out_what_each_decision_flag_means(
+    implementation: str,
+) -> None:
+    completed = subprocess.run(
+        [sys.executable, str(Path(cli.__file__)), implementation, "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    usage = " ".join(completed.stdout.split())
+
+    assert completed.returncode == 0
+    for phrase in (
+        "--approve approve the pending proposal exactly as shown",
+        "--reject REASON reject the pending proposal and return REASON",
+        "--edit-json FILE approve with the replacement arguments held in FILE",
+        "--expect-digest SHA256 digest printed with the paused approval;",
+        "required to approve or edit, optional to reject",
+    ):
+        assert phrase in usage
+
+
+def test_cli_digest_rule_matches_the_shared_policy_rule() -> None:
+    from agent_core.policy import is_approval_digest
+
+    samples = [
+        DIGEST,
+        DIGEST.upper(),
+        DIGEST[:63],
+        DIGEST + "0",
+        "",
+        "z" * 64,
+        " " + DIGEST[1:],
+    ]
+
+    assert [cli._valid_digest(sample) for sample in samples] == [
+        is_approval_digest(sample) for sample in samples
+    ]

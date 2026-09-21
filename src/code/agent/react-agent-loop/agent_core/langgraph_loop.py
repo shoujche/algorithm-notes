@@ -29,7 +29,7 @@ from .langchain_loop import (
 )
 from .mcp_adapter import validate_function_tools
 from .openai_loop import BudgetExceeded, ResponsesRetryError, ResumeDecision
-from .policy import ToolPolicy
+from .policy import ToolPolicy, digests_match
 
 
 class GraphState(TypedDict, total=False):
@@ -559,7 +559,7 @@ class LangGraphReActAgent:
         decision = interrupt({"approval": _approval_to_dict(approval)})
         if not isinstance(decision, Mapping):
             raise ValueError("approval decision must be an object")
-        if decision.get("digest") != approval.digest:
+        if not digests_match(str(decision.get("digest", "")), approval.digest):
             raise ValueError("approval digest does not match pending proposal")
         action = decision.get("action")
         if action not in {"approve", "reject"}:
@@ -1091,7 +1091,7 @@ def _validate_resume_decision(
 ) -> None:
     if decision.action not in {"approve", "reject"}:
         raise ValueError("decision action must be approve or reject")
-    if decision.digest != pending.digest:
+    if not digests_match(decision.digest, pending.digest):
         raise ValueError("approval digest does not match pending proposal")
     if decision.action == "reject" and decision.arguments is not None:
         raise ValueError("a rejection cannot edit arguments")

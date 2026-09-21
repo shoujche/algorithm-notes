@@ -10,8 +10,10 @@ import AgentLoopAnim from '../../components/AgentLoopAnim.astro';
 import { chapters } from '../../data/topics';
 import {
   CODE_DIR,
+  approvalDecision,
   checkpointSave,
   cliParser,
+  cliSanitizer,
   contractsFull,
   langchainCreateAgent,
   langchainImports,
@@ -406,8 +408,9 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
           把审批当成一次<b>对具体参数的签名</b>，而不是对工具的一次性授权：
           <ol class="steps">
             <li><b>谁需要审批由代码决定</b>：<kbd>list_files</kbd> / <kbd>read_file</kbd> / <kbd>list_skills</kbd> / <kbd>read_skill</kbd> 自动执行；<kbd>write_file</kbd> / <kbd>run_command</kbd> 必须暂停；其余一律 deny。这段逻辑不看模型说什么。</li>
-            <li><b>审批界面要能看懂</b>：工具名、目标路径、风险等级、完整参数，写文件给内容预览，跑命令给完整 argv。</li>
+            <li><b>审批界面要能看懂</b>：工具名、目标路径、风险等级、完整参数，写文件给内容预览，跑命令给完整 argv。脱敏<b>只遮敏感片段</b>——命中敏感键就只遮它的值，命中凭据字面量就只替换那一段，路径、argv 结构和周围上下文全部保留。整段打成 <kbd>[REDACTED]</kbd> 等于让审批的人瞎着点同意，反而给了「往内容里塞一行 <kbd>token: ...</kbd> 就能把整个 payload 藏起来」的可乘之机。</li>
             <li><b>批准绑定 digest</b>：digest 是工具名 + call_id + 规范化参数的 SHA-256。改任何一个字节就是另一次审批。</li>
+            <li><b>同意要回传你看到的那个 digest</b>：批准和改参数恢复都必须带 <kbd>--expect-digest</kbd>（64 位小写 hex），和检查点里当前 pending 的 digest 恒时比对通过，才会构造出决策。展示之后检查点变了，旧 digest 一定失败，也一定不会派发。</li>
             <li><b>拒绝也是一种输入</b>：理由作为 Observation 回给模型，它可以换方案或直接结束，而不是卡死。</li>
             <li><b>暂停是真的退出</b>：CLI 打印 run_id 并以 <kbd>exit 3</kbd> 结束进程。恢复靠检查点，不靠内存里挂着的对象。</li>
           </ol>
@@ -416,9 +419,9 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
         <ol class="flow">
           <li><span class="s">01</span><span>策略把提议判成 approval，生成 <b>ApprovalRequest</b>（规范化参数 + 预览 + digest）</span></li>
           <li><span class="s">02</span><span>写检查点 → 返回 PendingApproval → CLI 输出 run_id，<b>进程退出码 3</b></span></li>
-          <li><span class="s">03</span><span>用户 <kbd>--resume RUN_ID --approve</kbd>（或 <kbd>--reject 理由</kbd>、<kbd>--edit-json 文件</kbd>）</span></li>
+          <li><span class="s">03</span><span>用户 <kbd>--resume RUN_ID --approve --expect-digest &lt;暂停输出里的 digest&gt;</kbd>（改参数换成 <kbd>--edit-json 文件</kbd>，同样要带 digest；<kbd>--reject 理由</kbd>可不带，带了也照验）</span></li>
           <li><span class="s">04</span><span>恢复先<b>抢占文件锁</b>，避免两个进程同时恢复同一个 run</span></li>
-          <li><span class="s">05</span><span>比对 digest；编辑过参数则<b>重新校验 schema、重算 digest、重新绑定</b></span></li>
+          <li><span class="s">05</span><span><b>恒时比对</b> <kbd>--expect-digest</kbd> 与当前 pending digest，不一致就 fail closed；编辑过参数则<b>重新校验 schema、重算 digest、重新绑定</b></span></li>
           <li><span class="s">06</span><span>执行前把 call_id 写进账本，执行后回填 Observation，循环继续</span></li>
         </ol>
         <h4 class="sub">真实代码 · 策略与 digest</h4>
@@ -427,6 +430,12 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
         <h4 class="sub">真实代码 · 三版共用的 CLI 语义</h4>
         <p>三个子命令对应三种编排方式，但参数完全一样。这是「换编排层不换操作习惯」的体现，也让三版可以跑同一套对照测试。</p>
         <CodeBlock code={cliParser} lang="python" file="cli.py" src={src('cli.py')} />
+        <h4 class="sub">真实代码 · 只遮敏感片段的暂停输出</h4>
+        <p>脱敏做的是<b>区间替换</b>而不是整值丢弃：先把「已知凭据字面量」和「敏感键后面那个值」各自标成区间，合并重叠区间，再逐段拼回去。于是 <kbd>curl -H 'Authorization: [REDACTED]' https://…</kbd> 里该看的 URL 还在，该遮的令牌没了。</p>
+        <CodeBlock code={cliSanitizer} lang="python" file="cli.py" src={src('cli.py')} />
+        <h4 class="sub">真实代码 · 三个入口共用的决策构造</h4>
+        <p>三个 entrypoint 不各写一份校验，共用同一个 helper：参数格式在<b>建 Docker 和模型之前</b>就查完，digest 用 <kbd>hmac.compare_digest</kbd> 比，比不过就连 <kbd>ResumeDecision</kbd> 都构造不出来。</p>
+        <CodeBlock code={approvalDecision} lang="python" file="agent_core/approval_cli.py" src={src('agent_core/approval_cli.py')} />
         <p>恢复路径的每一个 <kbd>raise</kbd> 都对应一种攻击或误用：动作不合法、digest 对不上、拒绝时还想顺手改参数。批准后参数被写回时用的是<b>重新绑定过的规范化参数</b>，不是用户原样传入的字符串。</p>
         <CodeBlock code={openaiResume} lang="python" file="agent_core/openai_loop.py" src={src('agent_core/openai_loop.py')} />
         <h4 class="sub">故障点</h4>
@@ -434,7 +443,9 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
           <li><b>批准「这个工具」而不是「这次参数」</b>：等于给了模型一张后续随便填的空白支票。</li>
           <li><b>先执行后记账</b>：执行成功但记账失败时，重放会再执行一次。必须先 claim 再执行。</li>
           <li><b>审批界面只显示工具名</b>：用户看不到要写什么、要跑什么，点同意等于没审。</li>
-          <li><b>把参数原样打进日志</b>：参数里可能带路径、内容甚至凭据。CLI 输出前会做一次敏感字段脱敏。</li>
+          <li><b>把参数原样打进日志</b>：参数里可能带路径、内容甚至凭据。CLI 输出前会按片段脱敏。</li>
+          <li><b>一有可疑就整段 [REDACTED]</b>：审批的人看不到要写什么、要跑什么，只能盲签；模型还能靠故意触发检测把整个 payload 藏起来。遮值不遮结构。</li>
+          <li><b>同意时不回传 digest</b>：那就成了「同意当前 pending 的随便什么东西」。检查点在展示和恢复之间被换掉，你签的和执行的就不是一回事。</li>
           <li><b>审批疲劳</b>：什么都弹窗，用户就会一路点同意。只让真正有副作用的两个工具触发审批，是刻意的设计。</li>
         </ul>
         <p class="cue"><span class="t">记忆提示</span>批准的是一次参数，不是一个工具；先记账再执行，先校验再恢复。</p>

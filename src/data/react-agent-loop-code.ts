@@ -8,6 +8,7 @@ import type { CodeVariant } from './linked-list-code';
 // —— 公共内核 ——
 import contractsSource from '../code/agent/react-agent-loop/agent_core/contracts.py?raw';
 import policySource from '../code/agent/react-agent-loop/agent_core/policy.py?raw';
+import approvalCliSource from '../code/agent/react-agent-loop/agent_core/approval_cli.py?raw';
 import checkpointsSource from '../code/agent/react-agent-loop/agent_core/checkpoints.py?raw';
 import skillsSource from '../code/agent/react-agent-loop/agent_core/skills.py?raw';
 import mcpAdapterSource from '../code/agent/react-agent-loop/agent_core/mcp_adapter.py?raw';
@@ -173,8 +174,12 @@ export const langgraphRequestApproval = block(
 
 // ===== 09 暂停、审批与恢复 =====
 export const policyFull = policySource;
-/** 三个实现共用的 CLI 语义：子命令 + --resume + --approve/--reject/--edit-json */
+/** 三个实现共用的 CLI 语义：子命令 + --resume + --approve/--reject/--edit-json + --expect-digest */
 export const cliParser = block(cliSource, 'def build_parser() -> argparse.ArgumentParser:');
+/** 暂停输出只遮住敏感片段，路径、argv 结构和上下文仍然留给人看 */
+export const cliSanitizer = block(cliSource, 'def _sanitized_text(text: str) -> str:');
+/** 三个入口共用：先把 --expect-digest 和当前 pending digest 做恒时比较，再构造决策 */
+export const approvalDecision = block(approvalCliSource, 'def resume_decision(');
 /** 恢复时校验 digest、重新校验被编辑的参数，再继续执行 */
 export const openaiResume = block(openaiLoopSource, '    async def _resume_claimed(');
 

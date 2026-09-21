@@ -54,7 +54,8 @@ npm run preview  # 本地预览构建结果
 | 文件 | 说明 |
 | --- | --- |
 | [`agent_core/contracts.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/agent_core/contracts.py) | 三种 Agent 共用的提案、审批、运行状态与结果数据契约 |
-| [`agent_core/policy.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/agent_core/policy.py) | deny-by-default 工具分级、审批请求与参数摘要 |
+| [`agent_core/policy.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/agent_core/policy.py) | deny-by-default 工具分级、审批请求、参数摘要与恒时 digest 比对 |
+| [`agent_core/approval_cli.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/agent_core/approval_cli.py) | 三个入口共用的决策参数、`--expect-digest` 校验与恢复决策构造 |
 | [`agent_core/checkpoints.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/agent_core/checkpoints.py) | 暂停/恢复状态的原子化本地检查点存储 |
 | [`agent_core/skills.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/agent_core/skills.py) | 可信 Skill 目录扫描与渐进式正文读取 |
 | [`agent_core/mcp_adapter.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/agent_core/mcp_adapter.py) | 本地 MCP schema、调用结果与 Agent 工具格式之间的适配 |
@@ -67,7 +68,7 @@ npm run preview  # 本地预览构建结果
 | [`langchain_agent.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/langchain_agent.py) | LangChain 版本的可执行入口 |
 | [`langgraph_agent.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/langgraph_agent.py) | LangGraph 版本的可执行入口 |
 | [`mcp_server.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/mcp_server.py) | 容器内运行、仅使用 stdio 的六工具 MCP Server |
-| [`cli.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/cli.py) | 三种实现共用的启动、审批、拒绝与编辑后恢复 CLI |
+| [`cli.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/cli.py) | 三种实现共用的启动、审批、拒绝与编辑后恢复 CLI（含按片段脱敏的暂停输出） |
 | [`sandbox/Dockerfile`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/sandbox/Dockerfile) | 非 root、锁定依赖的 MCP 工具沙盒镜像 |
 | [`skills/workspace-helper/SKILL.md`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/skills/workspace-helper/SKILL.md) | 页面示例使用的工作区操作 Skill |
 | [`workspace/`](https://github.com/shoujche/algorithm-notes/tree/main/src/code/agent/react-agent-loop/workspace) | 三个入口与 CLI 的默认工作区（唯一挂载进容器的可写目录，内容不入库） |

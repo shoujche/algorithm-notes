@@ -126,7 +126,15 @@ def test_malformed_edit_arguments_are_rejected_before_dependencies_are_built(
 
     monkeypatch.setattr(module, "DockerMCPTransport", explode)
     args = module._parser().parse_args(
-        ["--resume", "run-1", "--approve", "--edit-arguments", "[]"]
+        [
+            "--resume",
+            "run-1",
+            "--approve",
+            "--edit-arguments",
+            "[]",
+            "--expect-digest",
+            "0123456789abcdef" * 4,
+        ]
     )
 
     with pytest.raises(ValueError, match="JSON object"):

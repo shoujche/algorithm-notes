@@ -2,17 +2,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 from pathlib import Path
-from typing import Any
 
 from mcp import ClientSession
 from mcp.client.stdio import stdio_client
 
-from agent_core.contracts import RunOutcome, to_json_value
+from agent_core import approval_cli
+from agent_core.contracts import RunOutcome
 from agent_core.langchain_loop import LangChainReActAgent
 from agent_core.mcp_adapter import MCPToolClient
-from agent_core.openai_loop import ResumeDecision
 from agent_core.sandbox import DockerMCPTransport
 
 
@@ -20,22 +18,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run the high-level LangChain ReAct Agent."
     )
-    parser.add_argument("user_input", nargs="?")
-    parser.add_argument("--resume", metavar="RUN_ID")
-    decision = parser.add_mutually_exclusive_group()
-    decision.add_argument("--approve", action="store_true")
-    decision.add_argument("--reject", metavar="REASON")
-    parser.add_argument("--edit-arguments", metavar="JSON")
-    parser.add_argument(
-        "--workspace",
-        type=Path,
-        default=Path(__file__).with_name("workspace"),
-    )
-    parser.add_argument(
-        "--skills",
-        type=Path,
-        default=Path(__file__).with_name("skills"),
-    )
+    approval_cli.add_decision_arguments(parser)
+    approval_cli.add_sandbox_arguments(parser, __file__)
     parser.add_argument(
         "--checkpoints",
         type=Path,
@@ -46,7 +30,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 async def _run(args: argparse.Namespace) -> RunOutcome:
-    edited = _validated_decision(args)
+    edited = approval_cli.validated_decision(args)
 
     from langchain.chat_models import init_chat_model
 
@@ -67,61 +51,13 @@ async def _run(args: argparse.Namespace) -> RunOutcome:
                 raise ValueError("resume run has no pending approval")
             return await agent.resume(
                 args.resume,
-                ResumeDecision(
-                    action="approve" if args.approve else "reject",
-                    digest=pending.digest,
-                    reason=args.reject or "",
-                    arguments=edited,
-                ),
+                approval_cli.resume_decision(args, pending.digest, edited),
             )
-
-
-def _validated_decision(args: argparse.Namespace) -> dict[str, Any] | None:
-    """Check every argument before any Docker or model dependency is built."""
-    if args.resume is None:
-        if not args.user_input:
-            raise ValueError("user_input is required for a new run")
-        if args.approve or args.reject is not None:
-            raise ValueError("--approve and --reject require --resume")
-        if args.edit_arguments is not None:
-            raise ValueError("--edit-arguments requires --resume")
-        return None
-    if args.user_input:
-        raise ValueError("user_input cannot be combined with --resume")
-    if not args.approve and args.reject is None:
-        raise ValueError("--approve or --reject is required with --resume")
-    if args.edit_arguments is None:
-        return None
-    return _json_object(args.edit_arguments)
-
-
-def _json_object(raw: str) -> dict[str, Any]:
-    value = json.loads(raw)
-    if not isinstance(value, dict):
-        raise ValueError("edited arguments must be a JSON object")
-    return value
-
-
-def _outcome_json(outcome: RunOutcome) -> str:
-    payload: dict[str, Any] = {
-        "run_id": outcome.run_id,
-        "final_text": outcome.final_text,
-    }
-    if outcome.pending_approval is not None:
-        request = outcome.pending_approval
-        payload["pending_approval"] = {
-            "tool": request.proposal.tool_name,
-            "arguments": to_json_value(request.proposal.arguments),
-            "risk": request.risk.value,
-            "preview": request.preview,
-            "digest": request.digest,
-        }
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
 def main() -> None:
     args = _parser().parse_args()
-    print(_outcome_json(asyncio.run(_run(args))))
+    print(approval_cli.outcome_json(asyncio.run(_run(args))))
 
 
 if __name__ == "__main__":
