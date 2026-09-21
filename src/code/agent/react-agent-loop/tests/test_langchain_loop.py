@@ -21,17 +21,16 @@ from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.types import Command, Send
 from pydantic import PrivateAttr
 
-from agent_core import langchain_loop
+from agent_core import langchain_loop, side_effects
 from agent_core.checkpoints import contains_secret
 from agent_core.contracts import to_json_value
-from agent_core.langchain_loop import (
+from agent_core.langchain_loop import JsonMemorySaver, LangChainReActAgent
+from agent_core.openai_loop import ResumeDecision
+from agent_core.side_effects import (
     CheckpointDurabilityError,
     ClaimOutcome,
-    JsonMemorySaver,
-    LangChainReActAgent,
     SideEffectLedger,
 )
-from agent_core.openai_loop import ResumeDecision
 from tests.fakes import FakeMCPClient
 
 
@@ -408,7 +407,7 @@ def _fail_durability_flush_for(monkeypatch, target: Path, *, skip: int = 0) -> N
     post-rename state for one file: the new content is on disk and the caller
     is told the flush could not be confirmed.
     """
-    real_replace = langchain_loop._atomic_json_replace
+    real_replace = side_effects.atomic_json_replace
     remaining = skip
 
     def guarded(path: Path, payload: Any) -> None:
@@ -421,7 +420,10 @@ def _fail_durability_flush_for(monkeypatch, target: Path, *, skip: int = 0) -> N
             return
         raise CheckpointDurabilityError(errno.EIO, "injected durability failure")
 
-    monkeypatch.setattr(langchain_loop, "_atomic_json_replace", guarded)
+    # Both consumers resolve the helper through their own module globals, so
+    # the ledger and the LangGraph saver each need their binding replaced.
+    monkeypatch.setattr(side_effects, "atomic_json_replace", guarded)
+    monkeypatch.setattr(langchain_loop, "atomic_json_replace", guarded)
 
 
 def test_persisted_checkpoint_needs_no_permission_change_after_rename(
@@ -637,7 +639,7 @@ def test_side_effect_claim_is_persistent_across_processes(tmp_path) -> None:
 import sys
 import time
 from pathlib import Path
-from agent_core.langchain_loop import SideEffectLedger
+from agent_core.side_effects import SideEffectLedger
 
 ledger, ready, barrier = map(Path, sys.argv[1:])
 ready.write_text("ready", encoding="utf-8")

@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any, Iterator
 
 import attrs
-from langgraph.types import Send
 from pydantic import BaseModel
 
 from .contracts import ApprovalRequest, Risk, RunState, ToolProposal, to_json_value
@@ -81,6 +80,21 @@ _ALLOWED_TOKEN_METRICS = frozenset(
 
 class RunClaimedError(RuntimeError):
     pass
+
+
+_OPAQUE_TYPE_FIELDS: dict[type, tuple[str, ...]] = {}
+
+
+def register_opaque_type(target: type, fields: tuple[str, ...]) -> None:
+    """Teach the secret scan how to read a slotted, non-dataclass container.
+
+    Unknown object types fail closed, which would reject legitimate framework
+    payloads. Callers that own such a type register its readable fields instead
+    of this module importing the framework that defines it.
+    """
+    if not isinstance(target, type) or not fields:
+        raise ValueError("an opaque type registration needs a type and fields")
+    _OPAQUE_TYPE_FIELDS[target] = fields
 
 
 def _normalize_key(key: str) -> str:
@@ -183,13 +197,16 @@ def _contains_secret_value(value: Any, active_ids: set[int]) -> bool:
                 active_ids,
             )
 
-        if isinstance(value, Send):
+        for target, field_names in _OPAQUE_TYPE_FIELDS.items():
+            if not isinstance(value, target):
+                continue
             return any(
-                _contains_secret_value(
+                _key_may_hold_secret(field_name)
+                or _contains_secret_value(
                     object.__getattribute__(value, field_name),
                     active_ids,
                 )
-                for field_name in ("node", "arg", "timeout")
+                for field_name in field_names
             )
 
         if is_dataclass(value) and not isinstance(value, type):

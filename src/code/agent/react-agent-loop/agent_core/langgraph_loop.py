@@ -20,15 +20,15 @@ from langgraph.types import Command, interrupt
 
 from .checkpoints import JsonCheckpointStore
 from .contracts import ApprovalRequest, Risk, RunOutcome, ToolProposal, to_json_value
-from .langchain_loop import (
-    ClaimOutcome,
-    JsonMemorySaver,
-    SideEffectLedger,
-    _atomic_json_replace,
-    _exclusive_file_lock,
-)
+from .langchain_loop import JsonMemorySaver
 from .mcp_adapter import decode_mcp_tool_result, validate_function_tools
 from .openai_loop import BudgetExceeded, ResponsesRetryError, ResumeDecision
+from .side_effects import (
+    ClaimOutcome,
+    SideEffectLedger,
+    atomic_json_replace,
+    exclusive_file_lock,
+)
 from .policy import ToolPolicy, digests_match
 
 
@@ -56,24 +56,24 @@ class ActiveBudgetStore:
         self.lock_path = self.path.with_name(f"{self.path.name}.lock")
 
     def initialize(self, run_id: str, remaining: float) -> None:
-        with _exclusive_file_lock(self.lock_path):
+        with exclusive_file_lock(self.lock_path):
             data = self._load()
             if run_id in data:
                 raise ValueError(f"run {run_id!r} already has a timeout budget")
             data[run_id] = _valid_remaining(remaining)
-            _atomic_json_replace(self.path, data)
+            atomic_json_replace(self.path, data)
 
     def load(self, run_id: str) -> float | None:
-        with _exclusive_file_lock(self.lock_path):
+        with exclusive_file_lock(self.lock_path):
             return self._load().get(run_id)
 
     def save(self, run_id: str, remaining: float) -> None:
-        with _exclusive_file_lock(self.lock_path):
+        with exclusive_file_lock(self.lock_path):
             data = self._load()
             if run_id not in data:
                 raise ValueError(f"run {run_id!r} has no timeout budget")
             data[run_id] = _valid_remaining(remaining)
-            _atomic_json_replace(self.path, data)
+            atomic_json_replace(self.path, data)
 
     def _load(self) -> dict[str, float]:
         try:

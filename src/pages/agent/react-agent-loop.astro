@@ -22,12 +22,16 @@ import {
   mcpListFunctionTools,
   mcpToolDefinitions,
   openaiContinue,
+  openaiCreateResponse,
+  openaiDispatchSideEffect,
+  openaiErrorClassification,
   openaiProcessCalls,
   openaiResume,
   openaiValidateArguments,
   orchestrationVariants,
   policyFull,
   sandboxVariants,
+  sideEffectClaim,
   skillDiscovery,
   skillDoc,
 } from '../../data/react-agent-loop-code';
@@ -105,7 +109,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
             <li><b>对话/响应状态</b>：模型侧的上下文标识（这里是 <kbd>response_id</kbd> 与待处理的 calls），恢复时才能接着上一轮说话。</li>
             <li><b>预算计数</b>：<kbd>turn</kbd> / <kbd>tool_calls</kbd> 及其上限。预算是安全阀，不是优化项。</li>
             <li><b>待审批调用</b>：<kbd>pending_approval</kbd>，带着风险等级、规范化参数、写入预览和 digest。</li>
-            <li><b>已执行账本</b>：<kbd>executed_call_ids</kbd>。恢复和重试时靠它判断「这次副作用是不是已经发生过」。</li>
+            <li><b>已执行账本</b>：只读调用的去重靠检查点里的 <kbd>executed_call_ids</kbd>；<b>有副作用的调用不认它</b>，而是认一份独立落盘的账本，状态只有 <kbd>claimed</kbd> / <kbd>executed</kbd> / <kbd>failed</kbd> 三种。</li>
           </ol>
           退出条件只有三种：<b>模型不再要工具</b>（正常结束）、<b>预算用尽</b>（安全终止）、<b>遇到敏感调用</b>（暂停，等人）。任何第四种「自己感觉差不多了」都是 bug。
         </Idea>
@@ -122,9 +126,12 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
         <CodeBlock code={openaiContinue} lang="python" file="agent_core/openai_loop.py" src={src('agent_core/openai_loop.py')} />
         <p>检查点写盘走的是「临时文件 → fsync → 原子替换」，并且落盘前先扫一遍有没有像密钥的字段。审批期间这个文件就是唯一的真相来源，所以权限固定 0600、目录 0700。</p>
         <CodeBlock code={checkpointSave} lang="python" file="agent_core/checkpoints.py" src={src('agent_core/checkpoints.py')} />
+        <p>副作用的状态机<b>不放在检查点里</b>，而是一份三版共用的独立账本：<kbd>missing → claimed → executed / failed</kbd>。<kbd>claim</kbd> 拿的是文件锁，所以跨进程只会有一个赢家；只有确认耐久落盘的新 claim 才返回 <kbd>GRANTED</kbd>，其余一律是 <kbd>UNCONFIRMED</kbd>——「记了 claimed」从来不等于「执行过」。这个模块不 import 任何 Agent 框架，手写版才能和另外两版共用同一份账本。</p>
+        <CodeBlock code={sideEffectClaim} lang="python" file="agent_core/side_effects.py" src={src('agent_core/side_effects.py')} />
         <h4 class="sub">故障点</h4>
         <ul class="fail">
           <li><b>只存消息、不存已执行 call_id</b>：恢复后模型看到同样的上下文，会再要求一次同样的写入，副作用发生两次。</li>
+          <li><b>把「已 claim」当成「已执行」</b>：claim 只证明有人打算执行。拿它回喂 duplicate，等于替一次可能压根没发生的写入作保。</li>
           <li><b>没有轮次上限</b>：模型反复调工具却不给答案，token 一直烧。轮次、工具数、总超时、输出大小四个上限要一起设。</li>
           <li><b>直接覆写检查点文件</b>：写到一半断电就同时失去新旧两份状态，必须原子替换。</li>
           <li><b>把密钥写进状态</b>：检查点是明文 JSON，凭据只能留在环境变量里。</li>
@@ -297,16 +304,30 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
         <CodeBlock code={openaiProcessCalls} lang="python" file="agent_core/openai_loop.py" src={src('agent_core/openai_loop.py')} />
         <p>没有框架就得自己守住 schema：确认工具名唯一、确认声明了 strict、用 Draft 2020-12 校验一次参数。少了这段，模型传什么就执行什么。</p>
         <CodeBlock code={openaiValidateArguments} lang="python" file="agent_core/openai_loop.py" src={src('agent_core/openai_loop.py')} />
+        <h4 class="sub">真实代码 · 已批准调用的派发只可能有四种结局</h4>
+        <p>手写版和另外两版用<b>同一份账本</b>，所以结局也完全一样：账本已是终态 → 回喂 <kbd>duplicate_side_effect_call</kbd>；只有 claimed → 回喂 <kbd>side_effect_status_uncertain</kbd> 并要求人工核对，<b>绝不再派发一次</b>；派发后 MCP 报 <kbd>is_error=true</kbd> → 记 <kbd>failed</kbd>；成功 → 记 <kbd>executed</kbd>。终态写盘的耐久性无法确认时，也照样报告 uncertain，而不是当成干净的成功。</p>
+        <CodeBlock code={openaiDispatchSideEffect} lang="python" file="agent_core/openai_loop.py" src={src('agent_core/openai_loop.py')} />
+        <h4 class="sub">真实代码 · 只对明确 transient 的模型错误重试</h4>
+        <p>重试策略要能说清「哪些错值得再试」：连接断开、超时、<kbd>429</kbd>、<kbd>5xx</kbd> 才重试，指数退避还带上限；<kbd>400</kbd> / <kbd>401</kbd> / 参数校验这类<b>等多久都一样会失败</b>的错，第一次就失败退出。重试耗尽后抛的是受控异常：只带异常类名、HTTP 状态和尝试次数，<b>既不串联原始异常也不复述请求</b>，所以日志里不会出现 prompt 或 Authorization 头。</p>
+        <CodeBlock code={openaiErrorClassification} lang="python" file="agent_core/openai_loop.py" src={src('agent_core/openai_loop.py')} />
+        <p>重试发生在<b>模型调用</b>这一层，它重发的只是本轮已经记录好的 <kbd>function_call_output</kbd>，不会碰工具。这是「副作用绝不随模型重试重放」的结构性保证，不靠调用者小心。</p>
+        <CodeBlock code={openaiCreateResponse} lang="python" file="agent_core/openai_loop.py" src={src('agent_core/openai_loop.py')} />
         <h4 class="sub">故障点</h4>
         <ul class="fail">
           <li><b>用顺序而不是 call_id 配对结果</b>：并行工具调用时会把结果错配到别的调用上。</li>
           <li><b>同一轮里多个敏感调用一次性批准</b>：用户只看了第一个就点了同意。这里是逐个暂停、逐个绑定 digest。</li>
           <li><b>工具报错就直接抛出</b>：应该回喂成结构化 Observation，让模型有机会改参数或换路径。</li>
           <li><b>重试时不看账本</b>：同一个 call_id 再执行一次，写入就发生两次。</li>
+          <li><b>派发前就把检查点改成「已执行」</b>：进程在派发中途挂掉，恢复时看到的是一句「重复调用」，而真实世界里那次写入可能根本没发生。落盘的只能是 claimed。</li>
+          <li><b>什么错都重试</b>：<kbd>400</kbd> 和 <kbd>401</kbd> 重试三次只是把同一个错误延后几秒报出来，还顺手烧掉了超时预算。</li>
+          <li><b>把 SDK 异常原样串联出去</b>：SDK 的错误信息里带着它发出的那个请求，等于把 prompt 和凭据一起写进日志。</li>
         </ul>
         <p class="cue"><span class="t">记忆提示</span>一轮 = 一次模型调用 + 一批 call_id 的裁决；裁决顺序是解析、暂停、执行、回填。</p>
         <Interview q="为什么用 previous_response_id，而不是自己维护 messages 列表?">
           <p>让服务端持有对话状态，本地只需要记住「上一次响应的 id」和「这一轮要回填哪些 call_id」。好处是<b>恢复时要落盘的东西少得多</b>（检查点里只有 response_id 和待处理的 calls），也不会因为本地裁剪历史而把工具调用和它的结果拆散——那是最常见的一类协议错误。代价是状态在服务端，做完全离线的重放测试时要用 fake client 顶上。</p>
+        </Interview>
+        <Interview q="进程在「已批准、正在写入」的那一瞬间被杀掉，恢复时应该说什么?">
+          <p>说实话。账本里留下的是 <kbd>claimed</kbd>，它只证明「有人打算执行」，既不能当成没发生（可能已经写进去了），也不能当成成功（可能一个字节都没落）。所以恢复的第一件事不是重试，而是回喂一条 <kbd>side_effect_status_uncertain</kbd> 的 Observation，附上「请人工核对目标系统并对账」，并且<b>永远不会自动派发第二次</b>。这里还有个容易被忽略的前提：派发之前<b>不能</b>把检查点里的 <kbd>pending_approval</kbd> 抹掉，否则崩溃之后恢复只会得到一句「这个 run 没有待审批项」，人连发生过什么都看不到。检查点保留待审批项、账本保留 claimed，两者合起来才让崩溃后的 run 仍然可恢复、可解释。</p>
         </Interview>
         <Interview q="模型在一轮里同时要求调用三个工具，要怎么处理?">
           <p>先<b>整体裁决再整体执行</b>。代码的做法是：一次性解析全部调用，只要其中存在未裁决的敏感调用就立刻暂停整轮；恢复后逐个执行，最后按原顺序、去重后一次性回填所有 <kbd>function_call_output</kbd>。不能「边执行边等审批」，否则用户在审批第二个调用时，第一个的副作用已经发生了。回填时顺序可以任意，但 call_id 必须对得上。</p>

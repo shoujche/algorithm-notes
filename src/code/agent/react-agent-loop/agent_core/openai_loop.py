@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -12,7 +12,9 @@ from jsonschema.exceptions import SchemaError, ValidationError
 
 from .checkpoints import JsonCheckpointStore
 from .contracts import Risk, RunOutcome, RunState, ToolProposal, to_json_value
+from .mcp_adapter import decode_mcp_tool_result
 from .policy import ToolPolicy, digests_match
+from .side_effects import ClaimOutcome, SideEffectLedger
 
 
 class BudgetExceeded(RuntimeError):
@@ -20,7 +22,76 @@ class BudgetExceeded(RuntimeError):
 
 
 class ResponsesRetryError(RuntimeError):
-    pass
+    """A model call gave up, summarised without echoing the request.
+
+    The failing exception is deliberately not chained and its message is
+    dropped: SDK errors quote the request that produced them, which for a
+    Responses call means the prompt and the ``Authorization`` header. Only the
+    exception type, the HTTP status and the attempt count survive into logs.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        attempts: int = 0,
+        error_type: str = "",
+        status_code: int | None = None,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.attempts = attempts
+        self.error_type = error_type
+        self.status_code = status_code
+        self.retryable = retryable
+
+
+_RETRYABLE_STATUS_CODES = frozenset({408, 429})
+_RETRYABLE_ERROR_NAMES = frozenset(
+    {
+        "APIConnectionError",
+        "APITimeoutError",
+        "ConnectError",
+        "ConnectTimeout",
+        "PoolTimeout",
+        "ReadError",
+        "ReadTimeout",
+        "RemoteProtocolError",
+        "TimeoutException",
+        "WriteError",
+        "WriteTimeout",
+    }
+)
+
+
+def model_error_status_code(error: BaseException) -> int | None:
+    """Read the HTTP status an SDK error reports, if it reports one."""
+    for candidate in (
+        getattr(error, "status_code", None),
+        getattr(getattr(error, "response", None), "status_code", None),
+    ):
+        if type(candidate) is int:
+            return candidate
+    return None
+
+
+def is_transient_model_error(error: BaseException) -> bool:
+    """Decide whether a failed model call is worth another attempt.
+
+    Only failures that are unambiguously transient qualify: a broken or timed
+    out connection, a rate limit, or a server-side error. Anything else —
+    notably ``400`` and ``401``, which repeat identically no matter how long we
+    wait — fails on the first attempt so the caller sees the real problem
+    instead of a delayed retry budget.
+    """
+    status = model_error_status_code(error)
+    if status is not None:
+        return status in _RETRYABLE_STATUS_CODES or 500 <= status <= 599
+    if isinstance(error, (TimeoutError, ConnectionError)):
+        return True
+    return any(
+        base.__name__ in _RETRYABLE_ERROR_NAMES for base in type(error).__mro__
+    )
 
 
 @dataclass(frozen=True)
@@ -45,12 +116,18 @@ class OpenAIReActAgent:
         max_retries: int = 2,
         max_output_chars: int = 32_768,
         timeout_seconds: float = 120,
+        retry_initial_delay: float = 0.25,
+        max_retry_delay: float = 8.0,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         run_id_factory: Callable[[], str] | None = None,
+        side_effects: SideEffectLedger | None = None,
     ) -> None:
         if min(max_turns, max_tool_calls, max_output_chars) < 1:
             raise ValueError("budgets must be positive")
         if max_retries < 0 or timeout_seconds <= 0:
             raise ValueError("retry and timeout budgets are invalid")
+        if retry_initial_delay < 0 or max_retry_delay < retry_initial_delay:
+            raise ValueError("retry backoff bounds are invalid")
         self._client = client
         self._mcp = mcp
         self._checkpoints = checkpoints
@@ -61,8 +138,18 @@ class OpenAIReActAgent:
         self._max_retries = max_retries
         self._max_output_chars = max_output_chars
         self._timeout_seconds = timeout_seconds
+        self._retry_initial_delay = retry_initial_delay
+        self._max_retry_delay = max_retry_delay
+        self._sleep = sleep
         self._run_id_factory = run_id_factory or (lambda: uuid.uuid4().hex)
+        self._side_effects = side_effects or SideEffectLedger(
+            self._checkpoints.directory / "side-effects.json"
+        )
         self._tools: list[dict[str, Any]] = []
+
+    @property
+    def side_effect_ledger(self) -> SideEffectLedger:
+        return self._side_effects
 
     async def start(self, user_input: str) -> RunOutcome:
         self._tools = await self._mcp.list_function_tools()
@@ -261,9 +348,6 @@ class OpenAIReActAgent:
                     }
                 )
                 continue
-            if call_id in state.executed_call_ids:
-                outputs[call_id] = _json_output({"error": "duplicate_call_id"})
-                continue
             if risk is Risk.APPROVAL:
                 self._validate_tool_arguments(
                     proposal.tool_name,
@@ -272,17 +356,22 @@ class OpenAIReActAgent:
                 rebound = self._policy.approval_for(proposal)
                 if state.approved_call_digests.get(call_id) != rebound.digest:
                     raise ValueError("approved proposal digest binding is invalid")
-                state = replace(
-                    state,
-                    executed_call_ids=state.executed_call_ids | {call_id},
+                # The ledger, not the checkpoint, decides whether an approved
+                # call may be dispatched, so nothing about this call is written
+                # back into the checkpoint before it reaches a terminal status.
+                outputs[call_id] = await self._dispatch_side_effect(
+                    state.run_id,
+                    proposal,
                 )
-                self._save_paused_state(state, response_id, calls)
+                continue
+            if call_id in state.executed_call_ids:
+                outputs[call_id] = _json_output({"error": "duplicate_call_id"})
+                continue
             outputs[call_id] = await self._bounded_tool_call(proposal)
-            if risk is Risk.READ_ONLY:
-                state = replace(
-                    state,
-                    executed_call_ids=state.executed_call_ids | {call_id},
-                )
+            state = replace(
+                state,
+                executed_call_ids=state.executed_call_ids | {call_id},
+            )
 
         ordered_outputs: list[dict[str, str]] = []
         emitted: set[str] = set()
@@ -300,15 +389,96 @@ class OpenAIReActAgent:
             )
         return await self._continue(state, ordered_outputs, response_id)
 
+    async def _dispatch_side_effect(
+        self,
+        run_id: str,
+        proposal: ToolProposal,
+    ) -> str:
+        """Dispatch an approved call at most once and report it honestly.
+
+        The ledger claim is the durable record written before the dispatch, so
+        a process that dies in between leaves a ``claimed`` row. A ``claimed``
+        row proves nothing about the target system, so replay reports it as
+        uncertain and asks for a human instead of dispatching again. Only the
+        terminal ``executed`` and ``failed`` statuses may be described to the
+        model as a finished or duplicate call.
+        """
+        call_id = proposal.call_id
+        claim = self._side_effects.claim(run_id, call_id)
+        if claim.outcome is ClaimOutcome.FINISHED:
+            return _json_output(
+                {
+                    "error": "duplicate_side_effect_call",
+                    "status": claim.status,
+                    "detail": "this call already finished and is not repeated",
+                }
+            )
+        if claim.outcome is ClaimOutcome.UNCONFIRMED:
+            return _uncertain_output(
+                claim.status,
+                "the call is claimed but never finished, so whether the side "
+                "effect ran is unconfirmed",
+                "check the target system by hand and reconcile the ledger; "
+                "this call is never dispatched again automatically",
+            )
+        try:
+            output = await self._tool_call(proposal)
+            decoded = decode_mcp_tool_result(output)
+        except Exception as error:
+            durable = self._side_effects.finish(run_id, call_id, "failed")
+            return _json_output(
+                {
+                    "error": (
+                        "side_effect_outcome_uncertain"
+                        if durable
+                        else "side_effect_status_uncertain"
+                    ),
+                    "status": "failed",
+                    "detail": str(error),
+                    "action_required": (
+                        "check the target system and ledger by hand; this call "
+                        "is not retried automatically"
+                    ),
+                }
+            )
+        status = "failed" if decoded.is_error else "executed"
+        if not self._side_effects.finish(run_id, call_id, status):
+            return _uncertain_output(
+                status,
+                "the call reached a terminal status but its ledger record is "
+                "not confirmed durable",
+                "check the target system and ledger by hand; this call is not "
+                "retried automatically",
+            )
+        if len(output) > self._max_output_chars:
+            raise BudgetExceeded("tool output budget exceeded")
+        if decoded.is_error:
+            return _json_output(
+                {
+                    "error": "side_effect_tool_error",
+                    "status": "failed",
+                    "content": decoded.envelope,
+                    "action_required": (
+                        "check the target system by hand; this call is not "
+                        "retried automatically"
+                    ),
+                }
+            )
+        return output
+
     async def _bounded_tool_call(self, proposal: ToolProposal) -> str:
+        output = await self._tool_call(proposal)
+        if len(output) > self._max_output_chars:
+            raise BudgetExceeded("tool output budget exceeded")
+        return output
+
+    async def _tool_call(self, proposal: ToolProposal) -> str:
         output = await self._mcp.call(
             proposal.tool_name,
             to_json_value(proposal.arguments),
         )
         if not isinstance(output, str):
             raise TypeError("MCP adapter results must be JSON strings")
-        if len(output) > self._max_output_chars:
-            raise BudgetExceeded("tool output budget exceeded")
         return output
 
     async def _create_response(
@@ -323,16 +493,32 @@ class OpenAIReActAgent:
         }
         if previous_response_id is not None:
             request["previous_response_id"] = previous_response_id
-        last_error: Exception | None = None
-        for _ in range(self._max_retries + 1):
+        # Retrying a model call never replays a tool: the retried request only
+        # resubmits the outputs already recorded for this turn.
+        failure: Exception | None = None
+        attempts = 0
+        for attempt in range(self._max_retries + 1):
+            attempts = attempt + 1
+            retry = False
             try:
                 return await self._client.responses.create(**request)
             except Exception as error:
-                last_error = error
-        attempts = self._max_retries + 1
-        raise ResponsesRetryError(
-            f"Responses API failed after {attempts} attempts"
-        ) from last_error
+                failure = error
+                retry = attempt < self._max_retries and is_transient_model_error(
+                    error
+                )
+            if not retry:
+                break
+            await self._sleep(self._retry_delay(attempt))
+        # Raised outside the ``except`` block so neither the SDK error nor its
+        # implicit context can carry the request into a traceback.
+        raise _retry_error(failure, attempts)
+
+    def _retry_delay(self, attempt: int) -> float:
+        return min(
+            self._retry_initial_delay * (2**attempt),
+            self._max_retry_delay,
+        )
 
     def _save_paused_state(
         self,
@@ -426,6 +612,40 @@ def _stored_calls(response_state: Mapping[str, Any]) -> list[dict[str, str]]:
         }
         for call in calls
     ]
+
+
+def _retry_error(
+    failure: Exception | None,
+    attempts: int,
+) -> ResponsesRetryError:
+    error_type = type(failure).__name__ if failure is not None else "UnknownError"
+    status = model_error_status_code(failure) if failure is not None else None
+    retryable = failure is not None and is_transient_model_error(failure)
+    counted = f"{attempts} attempt" if attempts == 1 else f"{attempts} attempts"
+    outcome = (
+        f"gave up after {counted}"
+        if retryable
+        else f"failed after {counted} and is not retryable"
+    )
+    described = error_type if status is None else f"{error_type} (HTTP {status})"
+    return ResponsesRetryError(
+        f"Responses API call {outcome}: {described}",
+        attempts=attempts,
+        error_type=error_type,
+        status_code=status,
+        retryable=retryable,
+    )
+
+
+def _uncertain_output(status: str, detail: str, action_required: str) -> str:
+    return _json_output(
+        {
+            "error": "side_effect_status_uncertain",
+            "status": status,
+            "detail": detail,
+            "action_required": action_required,
+        }
+    )
 
 
 def _json_output(value: Any) -> str:

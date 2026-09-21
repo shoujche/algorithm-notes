@@ -57,6 +57,7 @@ npm run preview  # 本地预览构建结果
 | [`agent_core/policy.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/agent_core/policy.py) | deny-by-default 工具分级、审批请求、参数摘要与恒时 digest 比对 |
 | [`agent_core/approval_cli.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/agent_core/approval_cli.py) | 三个入口共用的决策参数、`--expect-digest` 校验与恢复决策构造 |
 | [`agent_core/checkpoints.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/agent_core/checkpoints.py) | 暂停/恢复状态的原子化本地检查点存储 |
+| [`agent_core/side_effects.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/agent_core/side_effects.py) | 三版共用、不依赖任何框架的副作用账本：`claimed` / `executed` / `failed` 状态机与原子落盘 |
 | [`agent_core/skills.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/agent_core/skills.py) | 可信 Skill 目录扫描与渐进式正文读取 |
 | [`agent_core/mcp_adapter.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/agent_core/mcp_adapter.py) | 本地 MCP schema、调用结果与 Agent 工具格式之间的适配 |
 | [`agent_core/sandbox.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/agent_core/sandbox.py) | 生成带网络、权限和资源限制的 Docker MCP 启动参数 |

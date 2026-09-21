@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import multiprocessing
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from agent_core import side_effects
 from agent_core.checkpoints import JsonCheckpointStore
 from agent_core.contracts import ToolProposal
 from agent_core.mcp_adapter import MCPToolClient
@@ -19,8 +22,10 @@ from agent_core.openai_loop import (
     OpenAIReActAgent,
     ResponsesRetryError,
     ResumeDecision,
+    is_transient_model_error,
 )
 from agent_core.policy import approval_digest
+from agent_core.side_effects import CheckpointDurabilityError, ClaimOutcome
 from tests.fakes import (
     FakeMCPClient,
     FakeOpenAIClient,
@@ -607,6 +612,286 @@ async def test_concurrent_resumes_dispatch_side_effect_at_most_once(tmp_path) ->
     ]
 
 
+class SimulatedCrash(BaseException):
+    """Stands in for a process death between the claim and the terminal record.
+
+    A ``BaseException`` is deliberate: the loop only converts ordinary
+    exceptions into a recorded ``failed`` status, so this leaves the ledger
+    exactly as an abrupt process death would.
+    """
+
+
+class CrashingMCP(FakeMCPClient):
+    async def call(self, name: str, arguments: dict[str, Any]) -> str:
+        self.calls.append((name, arguments))
+        raise SimulatedCrash("killed mid-dispatch")
+
+
+class ErroringMCP(FakeMCPClient):
+    async def call(self, name: str, arguments: dict[str, Any]) -> str:
+        self.calls.append((name, arguments))
+        return json.dumps(
+            {"is_error": True, "content": {"detail": "disk is full"}},
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
+
+def write_response() -> SimpleNamespace:
+    return response(
+        "resp-1",
+        function_call("call-write", "write_file", '{"path":"b.py","content":"x"}'),
+    )
+
+
+def make_agent_with(tmp_path, scripted, mcp, **limits):
+    agent = OpenAIReActAgent(
+        client=FakeOpenAIClient(scripted),
+        mcp=mcp,
+        checkpoints=JsonCheckpointStore(tmp_path / ".runs"),
+        model="test-model",
+        run_id_factory=lambda: "run-1",
+        **limits,
+    )
+    return agent, agent._client, mcp
+
+
+def fail_ledger_durability_after(monkeypatch, *, skip: int) -> None:
+    """Report ledger writes as committed but not confirmed durable."""
+    real_replace = side_effects.atomic_json_replace
+    remaining = skip
+
+    def guarded(path: Path, payload: Any) -> None:
+        nonlocal remaining
+        real_replace(path, payload)
+        if remaining > 0:
+            remaining -= 1
+            return
+        raise CheckpointDurabilityError(errno.EIO, "injected durability failure")
+
+    monkeypatch.setattr(side_effects, "atomic_json_replace", guarded)
+
+
+@pytest.mark.asyncio
+async def test_executed_side_effect_records_a_terminal_ledger_status(
+    tmp_path,
+) -> None:
+    agent, _, mcp = make_agent(
+        tmp_path,
+        [write_response(), response("resp-2", text_item("saved"))],
+    )
+    pending = await agent.start("change")
+
+    outcome = await agent.resume(
+        "run-1",
+        ResumeDecision(action="approve", digest=pending.pending_approval.digest),
+    )
+
+    assert outcome.final_text == "saved"
+    assert mcp.calls == [("write_file", {"path": "b.py", "content": "x"})]
+    assert agent.side_effect_ledger.status("run-1", "call-write") == "executed"
+
+
+@pytest.mark.asyncio
+async def test_read_only_calls_leave_no_side_effect_ledger_record(tmp_path) -> None:
+    agent, _, _ = make_agent(
+        tmp_path,
+        [
+            response(
+                "resp-1",
+                function_call("call-read", "read_file", '{"path":"a.py"}'),
+            ),
+            response("resp-2", text_item("done")),
+        ],
+    )
+
+    await agent.start("inspect")
+
+    assert agent.side_effect_ledger.status("run-1", "call-read") is None
+
+
+@pytest.mark.asyncio
+async def test_claimed_call_is_reported_uncertain_and_never_dispatched(
+    tmp_path,
+) -> None:
+    agent, client, mcp = make_agent(
+        tmp_path,
+        [write_response(), response("resp-2", text_item("acknowledged"))],
+    )
+    pending = await agent.start("change")
+    # A process that died between the claim and the dispatch leaves exactly
+    # this record behind.
+    assert (
+        agent.side_effect_ledger.claim("run-1", "call-write").outcome
+        is ClaimOutcome.GRANTED
+    )
+
+    outcome = await agent.resume(
+        "run-1",
+        ResumeDecision(action="approve", digest=pending.pending_approval.digest),
+    )
+
+    assert mcp.calls == []
+    assert outcome.final_text == "acknowledged"
+    observation = json.loads(client.responses.requests[1]["input"][0]["output"])
+    assert observation["error"] == "side_effect_status_uncertain"
+    assert observation["status"] == "claimed"
+    assert "by hand" in observation["action_required"]
+    assert agent.side_effect_ledger.status("run-1", "call-write") == "claimed"
+
+
+@pytest.mark.asyncio
+async def test_crash_between_claim_and_dispatch_keeps_the_run_resumable(
+    tmp_path,
+) -> None:
+    crashing, _, first_mcp = make_agent_with(
+        tmp_path,
+        [write_response()],
+        CrashingMCP(),
+    )
+    pending = await crashing.start("change")
+    decision = ResumeDecision(
+        action="approve",
+        digest=pending.pending_approval.digest,
+    )
+
+    with pytest.raises(SimulatedCrash):
+        await crashing.resume("run-1", decision)
+
+    assert len(first_mcp.calls) == 1
+    assert crashing.side_effect_ledger.status("run-1", "call-write") == "claimed"
+
+    # The claim is the only record the dispatch wrote, so the checkpoint still
+    # holds the pending approval and the stored calls. Without them a resume
+    # could only report "run has no pending approval" and the operator would
+    # never learn what happened to the write.
+    stranded = JsonCheckpointStore(tmp_path / ".runs").load("run-1")
+    assert stranded.pending_approval.digest == decision.digest
+    assert [call["call_id"] for call in stranded.response_state["calls"]] == [
+        "call-write"
+    ]
+
+    recovered, client, second_mcp = make_agent_with(
+        tmp_path,
+        [response("resp-2", text_item("reported"))],
+        FakeMCPClient(),
+    )
+    outcome = await recovered.resume("run-1", decision)
+
+    assert second_mcp.calls == []
+    assert outcome.final_text == "reported"
+    observation = json.loads(client.responses.requests[0]["input"][0]["output"])
+    assert observation["error"] == "side_effect_status_uncertain"
+    assert observation["status"] == "claimed"
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_error_records_failed_and_is_not_retried(tmp_path) -> None:
+    agent, client, mcp = make_agent_with(
+        tmp_path,
+        [write_response(), response("resp-2", text_item("reported"))],
+        ErroringMCP(),
+    )
+    pending = await agent.start("change")
+    decision = ResumeDecision(
+        action="approve",
+        digest=pending.pending_approval.digest,
+    )
+
+    outcome = await agent.resume("run-1", decision)
+
+    assert outcome.final_text == "reported"
+    assert len(mcp.calls) == 1
+    assert agent.side_effect_ledger.status("run-1", "call-write") == "failed"
+    observation = json.loads(client.responses.requests[1]["input"][0]["output"])
+    assert observation["error"] == "side_effect_tool_error"
+    assert observation["status"] == "failed"
+    assert observation["content"] == {
+        "is_error": True,
+        "content": {"detail": "disk is full"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_finished_call_is_reported_as_a_duplicate_on_replay(tmp_path) -> None:
+    agent, _, mcp = make_agent(
+        tmp_path,
+        [write_response(), SimulatedCrash("killed after the tool finished")],
+    )
+    pending = await agent.start("change")
+    decision = ResumeDecision(
+        action="approve",
+        digest=pending.pending_approval.digest,
+    )
+
+    # The tool finished, then the process died before the next checkpoint
+    # write, so the pending approval is still the one on disk.
+    with pytest.raises(SimulatedCrash):
+        await agent.resume("run-1", decision)
+
+    assert mcp.calls == [("write_file", {"path": "b.py", "content": "x"})]
+    assert agent.side_effect_ledger.status("run-1", "call-write") == "executed"
+
+    replayed, client, second_mcp = make_agent_with(
+        tmp_path,
+        [response("resp-2", text_item("already done"))],
+        FakeMCPClient(),
+    )
+    outcome = await replayed.resume("run-1", decision)
+
+    assert second_mcp.calls == []
+    assert outcome.final_text == "already done"
+    observation = json.loads(client.responses.requests[0]["input"][0]["output"])
+    assert observation["error"] == "duplicate_side_effect_call"
+    assert observation["status"] == "executed"
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_terminal_record_is_reported_as_uncertain(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    agent, client, mcp = make_agent(
+        tmp_path,
+        [write_response(), response("resp-2", text_item("reported"))],
+    )
+    pending = await agent.start("change")
+    fail_ledger_durability_after(monkeypatch, skip=1)
+
+    outcome = await agent.resume(
+        "run-1",
+        ResumeDecision(action="approve", digest=pending.pending_approval.digest),
+    )
+
+    assert outcome.final_text == "reported"
+    assert len(mcp.calls) == 1
+    observation = json.loads(client.responses.requests[1]["input"][0]["output"])
+    assert observation["error"] == "side_effect_status_uncertain"
+    assert observation["status"] == "executed"
+    assert "by hand" in observation["action_required"]
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_claim_is_never_dispatched(tmp_path, monkeypatch) -> None:
+    agent, client, mcp = make_agent(
+        tmp_path,
+        [write_response(), response("resp-2", text_item("reported"))],
+    )
+    pending = await agent.start("change")
+    fail_ledger_durability_after(monkeypatch, skip=0)
+
+    outcome = await agent.resume(
+        "run-1",
+        ResumeDecision(action="approve", digest=pending.pending_approval.digest),
+    )
+
+    assert mcp.calls == []
+    assert outcome.final_text == "reported"
+    observation = json.loads(client.responses.requests[1]["input"][0]["output"])
+    assert observation["error"] == "side_effect_status_uncertain"
+    assert observation["status"] == "claimed"
+
+
 @pytest.mark.asyncio
 async def test_unknown_and_malformed_calls_return_errors_to_model(tmp_path) -> None:
     agent, client, mcp = make_agent(
@@ -692,17 +977,271 @@ async def test_max_tool_calls_stops_before_tool_execution(tmp_path) -> None:
     assert mcp.calls == []
 
 
+class APIStatusError(Exception):
+    """Shaped like the SDK's HTTP error, which always carries a status code."""
+
+    def __init__(self, status_code: int, message: str = "api failure") -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class APIResponseStatusError(Exception):
+    """Carries its status on the response object instead of the exception."""
+
+    def __init__(self, status_code: int) -> None:
+        super().__init__("api failure")
+        self.response = SimpleNamespace(status_code=status_code)
+
+
+class APIConnectionError(Exception):
+    """Named after the SDK transport error, which carries no status code."""
+
+
+TRANSIENT_ERRORS = [
+    TimeoutError("read timed out"),
+    ConnectionResetError("peer reset the connection"),
+    APIConnectionError("connection refused"),
+    APIStatusError(408),
+    APIStatusError(429),
+    APIStatusError(500),
+    APIStatusError(503),
+    APIResponseStatusError(502),
+]
+
+NON_TRANSIENT_ERRORS = [
+    APIStatusError(400),
+    APIStatusError(401),
+    APIStatusError(403),
+    APIStatusError(404),
+    APIStatusError(422),
+    APIResponseStatusError(400),
+    ValueError("arguments do not match schema"),
+    RuntimeError("unclassified failure"),
+]
+
+
+def recording_sleep() -> tuple[list[float], Any]:
+    delays: list[float] = []
+
+    async def sleep(delay: float) -> None:
+        delays.append(delay)
+
+    return delays, sleep
+
+
+@pytest.mark.parametrize("error", TRANSIENT_ERRORS, ids=repr)
+def test_transient_model_errors_are_classified_as_retryable(error: Exception) -> None:
+    assert is_transient_model_error(error) is True
+
+
+@pytest.mark.parametrize("error", NON_TRANSIENT_ERRORS, ids=repr)
+def test_other_model_errors_are_classified_as_final(error: Exception) -> None:
+    assert is_transient_model_error(error) is False
+
+
 @pytest.mark.asyncio
-async def test_responses_api_retries_then_exhausts(tmp_path) -> None:
+@pytest.mark.parametrize("error", TRANSIENT_ERRORS, ids=repr)
+async def test_transient_model_errors_are_retried(tmp_path, error: Exception) -> None:
+    delays, sleep = recording_sleep()
     agent, client, _ = make_agent(
         tmp_path,
-        [RuntimeError("temporary"), RuntimeError("still failing")],
+        [error, response("resp-1", text_item("recovered"))],
         max_retries=1,
+        retry_initial_delay=0.25,
+        sleep=sleep,
     )
 
-    with pytest.raises(ResponsesRetryError, match="2 attempts"):
-        await agent.start("hello")
+    outcome = await agent.start("hello")
+
+    assert outcome.final_text == "recovered"
     assert len(client.responses.requests) == 2
+    assert delays == [0.25]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", NON_TRANSIENT_ERRORS, ids=repr)
+async def test_non_transient_model_errors_fail_without_a_retry(
+    tmp_path,
+    error: Exception,
+) -> None:
+    delays, sleep = recording_sleep()
+    agent, client, _ = make_agent(
+        tmp_path,
+        [error, response("resp-1", text_item("never reached"))],
+        max_retries=3,
+        sleep=sleep,
+    )
+
+    with pytest.raises(ResponsesRetryError, match="not retryable"):
+        await agent.start("hello")
+
+    assert len(client.responses.requests) == 1
+    assert delays == []
+
+
+@pytest.mark.asyncio
+async def test_transient_model_failures_retry_then_exhaust(tmp_path) -> None:
+    delays, sleep = recording_sleep()
+    agent, client, _ = make_agent(
+        tmp_path,
+        [APIStatusError(503), APIStatusError(503)],
+        max_retries=1,
+        retry_initial_delay=0.25,
+        sleep=sleep,
+    )
+
+    with pytest.raises(ResponsesRetryError, match="2 attempts") as failure:
+        await agent.start("hello")
+
+    assert len(client.responses.requests) == 2
+    assert delays == [0.25]
+    assert failure.value.attempts == 2
+    assert failure.value.retryable is True
+    assert failure.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_retry_backoff_grows_exponentially_up_to_a_ceiling(tmp_path) -> None:
+    delays, sleep = recording_sleep()
+    agent, _, _ = make_agent(
+        tmp_path,
+        [APIStatusError(500)] * 5,
+        max_retries=4,
+        retry_initial_delay=0.5,
+        max_retry_delay=1.5,
+        sleep=sleep,
+    )
+
+    with pytest.raises(ResponsesRetryError):
+        await agent.start("hello")
+
+    assert delays == [0.5, 1.0, 1.5, 1.5]
+
+
+@pytest.mark.asyncio
+async def test_retry_failure_reveals_no_request_or_credential(tmp_path) -> None:
+    marker = "AUTH-MARKER-MUST-NOT-LEAK"
+    delays, sleep = recording_sleep()
+    agent, _, _ = make_agent(
+        tmp_path,
+        [
+            APIStatusError(
+                500,
+                f"upstream rejected header Authorization: {marker}",
+            )
+        ],
+        max_retries=0,
+        sleep=sleep,
+    )
+
+    with pytest.raises(ResponsesRetryError) as failure:
+        await agent.start(f"please send {marker}")
+
+    error = failure.value
+    rendered = "".join(
+        traceback.format_exception(type(error), error, error.__traceback__)
+    )
+    assert marker not in str(error)
+    assert marker not in repr(error)
+    assert marker not in rendered
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert error.error_type == "APIStatusError"
+
+
+@pytest.mark.asyncio
+async def test_model_retry_never_redispatches_a_finished_side_effect(
+    tmp_path,
+) -> None:
+    delays, sleep = recording_sleep()
+    agent, client, mcp = make_agent(
+        tmp_path,
+        [
+            write_response(),
+            APIStatusError(503),
+            APIStatusError(429),
+            response("resp-2", text_item("saved")),
+        ],
+        max_retries=2,
+        retry_initial_delay=0.25,
+        sleep=sleep,
+    )
+    pending = await agent.start("change")
+
+    outcome = await agent.resume(
+        "run-1",
+        ResumeDecision(action="approve", digest=pending.pending_approval.digest),
+    )
+
+    assert outcome.final_text == "saved"
+    assert mcp.calls == [("write_file", {"path": "b.py", "content": "x"})]
+    assert delays == [0.25, 0.5]
+    assert agent.side_effect_ledger.status("run-1", "call-write") == "executed"
+    # All three follow-up attempts resubmit the same recorded output.
+    outputs = [request["input"] for request in client.responses.requests[1:]]
+    assert len(outputs) == 3
+    assert outputs[0] == outputs[1] == outputs[2]
+
+
+@pytest.mark.asyncio
+async def test_exhausted_model_retries_leave_the_side_effect_finished(
+    tmp_path,
+) -> None:
+    delays, sleep = recording_sleep()
+    agent, _, mcp = make_agent(
+        tmp_path,
+        [write_response(), APIStatusError(503), APIStatusError(503)],
+        max_retries=1,
+        sleep=sleep,
+    )
+    pending = await agent.start("change")
+    decision = ResumeDecision(
+        action="approve",
+        digest=pending.pending_approval.digest,
+    )
+
+    with pytest.raises(ResponsesRetryError):
+        await agent.resume("run-1", decision)
+
+    assert len(mcp.calls) == 1
+    assert agent.side_effect_ledger.status("run-1", "call-write") == "executed"
+
+    replayed, client, second_mcp = make_agent_with(
+        tmp_path,
+        [response("resp-2", text_item("already done"))],
+        FakeMCPClient(),
+    )
+    outcome = await replayed.resume("run-1", decision)
+
+    assert second_mcp.calls == []
+    assert outcome.final_text == "already done"
+    observation = json.loads(client.responses.requests[0]["input"][0]["output"])
+    assert observation["error"] == "duplicate_side_effect_call"
+    assert observation["status"] == "executed"
+
+
+def test_pure_sdk_loop_imports_no_agent_framework() -> None:
+    project = Path(__file__).parents[1]
+    program = (
+        "import sys\n"
+        "import agent_core.openai_loop\n"
+        "frameworks = {'langchain', 'langchain_core', 'langgraph'}\n"
+        "leaked = sorted(\n"
+        "    {name.split('.')[0] for name in sys.modules}\n"
+        "    & frameworks\n"
+        ")\n"
+        "print(','.join(leaked))\n"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", program],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert completed.stdout.strip() == ""
 
 
 def test_pure_openai_cli_help_needs_no_api_key() -> None:

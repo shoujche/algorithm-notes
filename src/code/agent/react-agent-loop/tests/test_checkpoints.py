@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
 import stat
+import subprocess
+import sys
 from dataclasses import replace
+from pathlib import Path
+from typing import Any
 
 import pytest
 
 from agent_core.checkpoints import JsonCheckpointStore
 from agent_core.contracts import ApprovalRequest, Risk, RunState, ToolProposal
+from agent_core.side_effects import ClaimOutcome, SideEffectLedger
 
 
 def sample_state(run_id: str = "run-1", *, turn: int = 2) -> RunState:
@@ -338,3 +344,57 @@ def test_checkpoint_rejects_non_whitelisted_persisted_fields(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="field"):
         store.load(state.run_id)
+
+
+def claim_in_process(ledger_path: str, barrier: Any, results: Any) -> None:
+    ledger = SideEffectLedger(ledger_path)
+    barrier.wait(10)
+    results.put(ledger.claim("run-1", "call-write").outcome.value)
+
+
+def test_cross_process_claims_grant_exactly_one_winner(tmp_path) -> None:
+    context = multiprocessing.get_context("spawn")
+    contenders = 4
+    barrier = context.Barrier(contenders)
+    results = context.Queue()
+    ledger_path = tmp_path / "side-effects.json"
+    processes = [
+        context.Process(
+            target=claim_in_process,
+            args=(str(ledger_path), barrier, results),
+        )
+        for _ in range(contenders)
+    ]
+
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(30)
+
+    assert [process.exitcode for process in processes] == [0] * contenders
+    outcomes = sorted(results.get(timeout=5) for _ in range(contenders))
+    assert outcomes == [ClaimOutcome.GRANTED.value] + [
+        ClaimOutcome.UNCONFIRMED.value
+    ] * (contenders - 1)
+    assert SideEffectLedger(ledger_path).status("run-1", "call-write") == "claimed"
+
+
+def test_checkpoint_store_imports_no_agent_framework() -> None:
+    project = Path(__file__).parents[1]
+    program = (
+        "import sys\n"
+        "import agent_core.checkpoints\n"
+        "import agent_core.side_effects\n"
+        "frameworks = {'langchain', 'langchain_core', 'langgraph'}\n"
+        "print(','.join(sorted({n.split('.')[0] for n in sys.modules} & frameworks)))\n"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", program],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert completed.stdout.strip() == ""

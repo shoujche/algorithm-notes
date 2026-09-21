@@ -10,6 +10,7 @@ import contractsSource from '../code/agent/react-agent-loop/agent_core/contracts
 import policySource from '../code/agent/react-agent-loop/agent_core/policy.py?raw';
 import approvalCliSource from '../code/agent/react-agent-loop/agent_core/approval_cli.py?raw';
 import checkpointsSource from '../code/agent/react-agent-loop/agent_core/checkpoints.py?raw';
+import sideEffectsSource from '../code/agent/react-agent-loop/agent_core/side_effects.py?raw';
 import skillsSource from '../code/agent/react-agent-loop/agent_core/skills.py?raw';
 import mcpAdapterSource from '../code/agent/react-agent-loop/agent_core/mcp_adapter.py?raw';
 import sandboxSource from '../code/agent/react-agent-loop/agent_core/sandbox.py?raw';
@@ -87,6 +88,11 @@ export const checkpointSave = block(
   checkpointsSource,
   '    def save(self, state: RunState) -> None:',
 );
+/** 副作用账本的 claim：三版共用的中立模块，missing → claimed 是派发前唯一的耐久记录 */
+export const sideEffectClaim = block(
+  sideEffectsSource,
+  '    def claim(self, run_id: str, tool_call_id: str) -> SideEffectClaim:',
+);
 
 // ===== 03 Skills 渐进式披露 =====
 export const skillDoc = skillDocSource;
@@ -148,13 +154,28 @@ export const openaiValidateArguments = block(
   openaiLoopSource,
   '    def _validate_tool_arguments(',
 );
+/** 已批准调用的派发：先 claim 再执行，终态之外的一切都只能报告「未确认」 */
+export const openaiDispatchSideEffect = block(
+  openaiLoopSource,
+  '    async def _dispatch_side_effect(',
+);
+/** 只有明确 transient 才重试：400 / 401 / 校验错误第一次就失败 */
+export const openaiErrorClassification = block(
+  openaiLoopSource,
+  'def is_transient_model_error(error: BaseException) -> bool:',
+);
+/** 重试只重发同一份已记录的输出，永远不会重放工具 */
+export const openaiCreateResponse = block(
+  openaiLoopSource,
+  '    async def _create_response(',
+);
 
 // ===== 07 LangChain 高层 Agent =====
 /** import 段本身就是证据：create_agent 的运行时跑在 LangGraph 上 */
 export const langchainImports = excerpt(
   langchainLoopSource,
   'from langchain.agents import create_agent',
-  'from langgraph.types import Command, interrupt',
+  'from langgraph.types import Command, Send, interrupt',
 );
 /** 四个 middleware + create_agent + LangGraph checkpointer */
 export const langchainCreateAgent = excerpt(
