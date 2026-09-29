@@ -1,0 +1,235 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import RagQuestion from '../../components/RagQuestion.astro';
+import Interview from '../../components/Interview.astro';
+import { chapters } from '../../data/topics';
+import { CODE_DIR, decode } from '../../data/agent-theory-code';
+import { ghBlob } from '../../lib/github';
+
+const chapter = chapters.find((item) => item.slug === 'agent-theory')!;
+---
+<BaseLayout title="Agent 理论基础 · Agent · 算法、Python 与 Agent 学习手记" active="agent">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Agent / {chapter.num} · Agent 理论基础</span>
+        <h2>开发岗怎么讲 <em>LLM</em>：<br />概念清楚，能落地</h2>
+        <p>题目来自 AgentGuide 理论基础篇。原题库把算法岗推导和开发岗应用写在一起；本章只保留开发岗要讲的：注意力做什么、解码怎么配、KV Cache / LoRA / vLLM 怎么省钱，以及 SFT 和对齐怎么选。公式点到能解释参数即可，不手推。</p>
+        <div class="meta">
+          <div><span class="n">开发岗</span><span class="l">Focus</span></div>
+          <div><span class="n">6</span><span class="l">Topic Groups</span></div>
+          <div><span class="n">KV</span><span class="l">Cache</span></div>
+          <div><span class="n">SFT</span><span class="l">Alignment</span></div>
+        </div>
+      </div>
+
+      <section class="article" id="transformer">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="架构 · Transformer" /></div>
+        <h3>Transformer 与注意力</h3>
+        <p class="lead">面试官要听的是：注意力如何让模型「看」整段上下文、位置信息怎么补、推理时 KV Cache 为什么变小。</p>
+
+        <RagQuestion num={1} title="自注意力怎么工作？为什么比 RNN 更适合长序列？">
+          <p class="exam"><b>开发岗考点：</b>注意力 = 可学习的加权平均；工程上会碰到 Padding mask、Causal mask、KV Cache、Flash Attention。</p>
+          <p>每个 token 先投影成 Query / Key / Value。用 Q 去和所有 K 比相似度，Softmax 得到权重，再对 V 加权求和。直观上：当前词在问「我该看谁」，别人在回答「我有什么信息」。</p>
+          <ul>
+            <li><b>相对 RNN：</b>RNN 必须一步步算，长距离依赖容易丢；Self-Attention 一步就能看到整段，训练可并行。</li>
+            <li><b>代价：</b>长度 n 时注意力是 O(n²)。长上下文要靠 GQA、KV Cache、Flash Attention、滑动窗口等工程手段。</li>
+            <li><b>实现：</b>用框架自带 Attention；Padding 位置要 mask 掉，生成任务还要 Causal mask，避免看到未来 token。</li>
+          </ul>
+          <Interview q="Multi-Head 和 Cross-Attention 分别干什么？">
+            <p>多头相当于多通道：不同头看语法、指代、局部搭配。Self-Attention 的 Q/K/V 来自同一段；Cross-Attention 的 Q 来自一段、K/V 来自另一段，例如 Encoder-Decoder 或 VLM 里「文本去看图像 token」。</p>
+          </Interview>
+        </RagQuestion>
+
+        <RagQuestion num={2} title="什么是位置编码？为什么必需？常见怎么做？">
+          <p class="exam"><b>开发岗考点：</b>Attention 本身不认顺序；BERT/GPT 早期用可学习位置嵌入；现代开源模型多用 ROPE。</p>
+          <p>Self-Attention 是置换不变的：打乱词序，注意力仍能算，但「我爱你」和「你爱我」语义不同，所以必须显式注入位置。</p>
+          <table>
+            <thead><tr><th>方式</th><th>开发时要注意</th></tr></thead>
+            <tbody>
+              <tr><td>Sinusoidal</td><td>无额外参数，理论上能外推；表达力一般。</td></tr>
+              <tr><td>Learned Embedding</td><td><kbd>nn.Embedding(max_len, d)</kbd>，简单；超长就会越界，BERT/早期 GPT 常用。</td></tr>
+              <tr><td>ROPE</td><td>旋 Q/K，关注相对距离；LLaMA、Qwen 标配。长上下文要看模型是否支持 YaRN/NTK scaling，不能默认无限拉长。</td></tr>
+            </tbody>
+          </table>
+        </RagQuestion>
+
+        <RagQuestion num={3} title="ROPE 是什么？相对绝对位置编码有何优劣？">
+          <p>开发岗不要求推导复数旋转。记住三点：它把位置编进 Q/K 的旋转里；注意力更关心<b>相对距离</b>；无额外位置表，长文本外推比绝对位置嵌入好。</p>
+          <p>工程含义：同一套权重更容易被用在更长上下文；但真要 32k/128k，还要看训练长度、scaling 方法和显存。位置敏感的抽取任务不一定永远优于绝对位置，选型看模型卡，不要自己改旋转实现。</p>
+        </RagQuestion>
+
+        <RagQuestion num={4} title="MHA、MQA、GQA 有什么区别？">
+          <p>核心差别是 <b>K/V 头数</b>。Q 头数通常不变，K/V 越少，推理时 KV Cache 越小、吞吐越高。</p>
+          <table>
+            <thead><tr><th></th><th>K/V 头</th><th>KV Cache</th><th>典型用途</th></tr></thead>
+            <tbody>
+              <tr><td>MHA</td><td>和 Q 一样多</td><td>最大</td><td>训练精度优先，BERT / 早期 GPT</td></tr>
+              <tr><td>MQA</td><td>全头共享 1 套</td><td>最小</td><td>高吞吐推理，PaLM / Falcon</td></tr>
+              <tr><td>GQA</td><td>分组共享</td><td>折中</td><td>LLaMA-2、Mistral、多数 7B+ 开源模型</td></tr>
+            </tbody>
+          </table>
+          <p>部署优先看模型是不是 GQA/MQA：同样 7B，KV Cache 能差数倍。训练小模型做实验可以用 MHA；线上长上下文对话几乎都会选 GQA。</p>
+        </RagQuestion>
+
+        <RagQuestion num={5} title="Encoder-Only、Decoder-Only、Encoder-Decoder 各自擅长什么？">
+          <table>
+            <thead><tr><th>架构</th><th>Attention</th><th>开发选型</th></tr></thead>
+            <tbody>
+              <tr><td>Encoder-Only</td><td>双向</td><td>分类、NER、向量检索 embedding（BERT 系）</td></tr>
+              <tr><td>Decoder-Only</td><td>Causal</td><td>对话、Agent、代码生成，当前默认</td></tr>
+              <tr><td>Encoder-Decoder</td><td>双向 + Cross</td><td>翻译、摘要等明确「输入→输出」任务</td></tr>
+            </tbody>
+          </table>
+          <p>今天产品默认 Decoder-Only，理解类任务也能靠 Prompt 做。Embedding / 检索仍常用 Encoder。不要为了「完整」强上 Encoder-Decoder，除非你有成熟的 seq2seq 数据与延迟预算。</p>
+        </RagQuestion>
+      </section>
+
+      <section class="article" id="decode">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="mid" text="推理参数 · Tokenizer" /></div>
+        <h3>解码策略与词元化</h3>
+
+        <RagQuestion num={6} title="Scaling Laws 对开发有什么用？（不推公式）">
+          <p>它说的是：参数、数据、算力一起涨，效果才涨；只堆参数、数据不够，会浪费。Chinchilla 的工程含义是「小模型训足」往往比「大模型欠训」更划算。</p>
+          <p>开发岗落地：选型看<b>总 token 训练量、数据质量、推理成本</b>，不要只看参数量。7B 充分训练可以打过欠训的 13B。业务上先锁质量门槛，再决定用 7B 本地还是更大模型 API。</p>
+        </RagQuestion>
+
+        <RagQuestion num={7} title="Greedy、Beam、Top-K、Top-P 怎么选？">
+          <p>解码就是「下一个 token 怎么挑」。API 里常见 <kbd>temperature</kbd>、<kbd>top_p</kbd>、<kbd>top_k</kbd>。</p>
+          <table>
+            <thead><tr><th>策略</th><th>行为</th><th>开发场景</th></tr></thead>
+            <tbody>
+              <tr><td>Greedy</td><td>永远最高概率</td><td>代码、JSON、工具参数，要稳定</td></tr>
+              <tr><td>Beam</td><td>保留多条候选</td><td>翻译/摘要；对话里少用，又慢又死板</td></tr>
+              <tr><td>Top-K</td><td>从前 K 个里采样</td><td>可用，但 K 是死数，分布尖/平时都不合适</td></tr>
+              <tr><td>Top-P</td><td>累积概率到 P 再采样</td><td>对话默认；常配 temperature 0.7–1.0，P≈0.9</td></tr>
+            </tbody>
+          </table>
+          <p>Function Calling / 结构化输出：temperature→0，关掉采样。开放聊天：Top-P + 中等 temperature。出重复就降温度或加 repetition penalty，不要先怪模型。</p>
+          <CodeBlock code={decode} lang="python" file="decode.py" src={ghBlob(`${CODE_DIR}/decode.py`)} />
+        </RagQuestion>
+
+        <RagQuestion num={8} title="词元化是什么？BPE 和 WordPiece 差在哪？">
+          <p>Tokenizer 把文本切成模型词表里的 token，再映射成 ID。词级会 OOV、词表爆炸；字符级序列太长。子词是折中：词表大约 3 万–10 万，生僻词能拆开。</p>
+          <ul>
+            <li><b>BPE：</b>反复合并最高频相邻对。GPT / LLaMA / Qwen 一路。实现简单。</li>
+            <li><b>WordPiece：</b>按「合并后语言模型更好」选对，BERT 用，非词首常带 <kbd>##</kbd>。</li>
+            <li><b>现在：</b>SentencePiece / Byte-level BPE，空格也进词表，少 UNK，多语言更稳。</li>
+          </ul>
+          <p>工程坑：不同模型 tokenizer 不能混用；计费和上下文窗口都按 token 不是按字；中文一个字可能 1–2 个 token。RAG 切块、截断、缓存 key 都按同一 tokenizer 算。</p>
+        </RagQuestion>
+      </section>
+
+      <section class="article" id="ability">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="base" text="能力边界" /></div>
+        <h3>模型能力与现象</h3>
+
+        <RagQuestion num={9} title="传统 NLP 和 LLM 最大的区别？">
+          <p>范式从「一个任务一个模型」变成「一个基础模型 + Prompt / 工具」。NLP 时代靠标注数据和专用结构；LLM 靠海量无标注预训练，再用少量示例或指令覆盖很多任务。</p>
+          <table>
+            <thead><tr><th></th><th>传统 NLP</th><th>LLM 产品</th></tr></thead>
+            <tbody>
+              <tr><td>交付物</td><td>分类器 / 抽取器</td><td>对话、Agent、生成</td></tr>
+              <tr><td>换任务</td><td>重训或换模型</td><td>换 Prompt、工具、检索</td></tr>
+              <tr><td>失败模式</td><td>样本外崩</td><td>幻觉、越权调用、上下文溢出</td></tr>
+            </tbody>
+          </table>
+          <p>相同点：底层仍是 Transformer。开发上不要把 LLM 当万能分类器——延迟、成本和可控性不够时，专用小模型仍然该上。</p>
+        </RagQuestion>
+
+        <RagQuestion num={11} title="怎么理解涌现能力？对产品有什么含义？">
+          <p>参数和数据到一定规模后，模型突然能做 ICL、按指令办事、简单分步推理。开发岗记住<b>能力不随参数平滑保证</b>：7B 和 70B 不是同一档产品。</p>
+          <p>落地：复杂规划、多工具 Agent 优先够大的模型；小模型做分类、改写、抽取更稳。评测要用真实任务，不要只看「会不会 CoT」。学术界也有人质疑「突变」是指标造成的，业务上当能力门槛来用即可。</p>
+        </RagQuestion>
+      </section>
+
+      <section class="article" id="inference">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="hard" text="部署 · 省显存" /></div>
+        <h3>推理与微调工程</h3>
+
+        <RagQuestion num={18} title="KV Cache 是什么？为什么能加速推理？">
+          <p>自回归每步都要看前面所有 token 的 K/V。若每步重算整段 Attention，成本随长度平方涨。KV Cache 把已算过的 K/V 存下来，新步只算最新 token，把生成从「每步全量」变成「每步增量」。</p>
+          <ul>
+            <li>显存大致随 <kbd>层数 × KV头数 × 序列长 × 精度</kbd> 涨。GQA 就是砍 KV 头。</li>
+            <li>批次一大、上下文一长，OOM 往往先出在 KV 而不是权重。</li>
+            <li>vLLM 的 PagedAttention 按页管理 KV，减少碎片、提高并发。</li>
+          </ul>
+        </RagQuestion>
+
+        <RagQuestion num={19} title="LoRA 原理？秩 r 怎么选？">
+          <p>冻结原权重，只训练低秩增量 <kbd>ΔW ≈ BA</kbd>，r 远小于原维度。显存和可训练参数大幅下降，一份基座可以挂多个 Adapter。</p>
+          <p>r 太小学不够，太大接近全量微调、失去省资源意义。开发实践：先 r=8/16，看验证集；要改风格/格式通常小 r 够用，要灌领域知识往往 RAG 比把事实写进 LoRA 更合适。QLoRA 是量化基座 + LoRA，单卡就能微调 7B。</p>
+        </RagQuestion>
+
+        <RagQuestion num={23} title="vLLM 怎么做推理加速？">
+          <ul>
+            <li><b>PagedAttention：</b>KV 分页，连续逻辑、物理不连续，提高 GPU 利用率。</li>
+            <li><b>Continuous batching：</b>请求随时进出，不等最长序列结束。</li>
+            <li><b>CUDA kernel / 量化：</b>融合算子、AWQ/GPTQ 等降低带宽。</li>
+          </ul>
+          <p>开发对接：OpenAI 兼容 API、流式输出、限制 max tokens。它不负责 RAG 或工具调用，那些仍在应用层。</p>
+        </RagQuestion>
+
+        <RagQuestion num={20} title="有限算力下微调还有哪些常用方法？">
+          <p>优先级通常是：Prompt / ICL → LoRA/QLoRA → 部分层微调 → 全量。再叠加：更短序列、梯度检查点、ZeRO/FSDP、梯度累积、冻结视觉编码器（VLM）。先问「要改行为还是补知识」——补知识优先 RAG。</p>
+        </RagQuestion>
+
+        <RagQuestion num={26} title="如何估 LLaMA-7B 推理显存？（开发口径）">
+          <p>权重：7e9 × 2 byte（FP16）≈ 14GB。再加 KV Cache、激活和框架开销，单请求短上下文大约 16GB+；长上下文或 batch&gt;1 会再涨一截。INT8/INT4 权重量化能腰斩权重，但 KV 仍可能是瓶颈。以实测 <kbd>nvidia-smi</kbd> 为准，公式只用来排机型。</p>
+        </RagQuestion>
+      </section>
+
+      <section class="article" id="vlm">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="mid" text="多模态 · 能讲清" /></div>
+        <h3>VLM：对齐、幻觉、应用</h3>
+        <p class="lead">原题库大量公式和论文对比偏算法岗。开发岗能讲清「图文怎么接上、幻觉长什么样、产品能做什么」即可。</p>
+
+        <RagQuestion num={1} title="VLM 的核心挑战是什么？图文怎么对齐？">
+          <p>图像是连续像素，文本是离散 token，语义粒度还不一致。工程上常见三条路：</p>
+          <ul>
+            <li><b>CLIP 式对比学习：</b>匹配图文对拉近、不匹配推远，适合检索和打分。</li>
+            <li><b>连接器 + LLM：</b>ViT 出视觉 token，MLP/Q-Former 投进 LLM（LLaVA）。开发就是冻视觉编码器、训投影层和指令数据。</li>
+            <li><b>Cross-Attention：</b>语言当 Q，视觉当 K/V，细但重。</li>
+          </ul>
+          <p>产品集成优先选现成 VLM API 或开源 LLaVA 类，把精力放在分辨率、token 数、延迟和安全过滤。</p>
+        </RagQuestion>
+
+        <RagQuestion num={9} title="VLM 幻觉和纯文本幻觉有何不同？">
+          <p>文本幻觉是编造事实；VLM 还会<b>看见没出现的物体、数错数量、忽略图里的字、把背景认成主体</b>。缓解：更高分辨率切块、要求引用图中证据、关键任务加检测/OCR 工具，而不是只靠 caption。</p>
+        </RagQuestion>
+      </section>
+
+      <section class="article" id="align">
+        <div class="art-head"><span class="num">06</span><LcBadge kind="mid" text="对齐 · 开发选型" /></div>
+        <h3>SFT 与对齐（不讲 PPO 推导）</h3>
+
+        <RagQuestion num={1} title="相对 SFT，RLHF 解决什么？为什么光 SFT 不够？">
+          <p>SFT 是模仿「标准答案」，学的是行为克隆。开放对话里「更好」是偏好而不是唯一答案，SFT 分不出平庸正确和更好。RLHF 用人类对比数据学奖励，再优化策略，让回答更像「人选中的那个」。</p>
+          <p>开发含义：先 SFT 把格式、工具调用、拒答话术稳住；再考虑偏好对齐。没有标注偏好数据时，不要上 PPO。很多团队用 DPO 替代，因为不用边生成边训 RL。</p>
+        </RagQuestion>
+
+        <RagQuestion num={8} title="DPO 相对 PPO-RLHF 对开发有什么好处？">
+          <p>DPO 直接在「赢/输」成对数据上优化策略，跳过单独 Reward Model 和 PPO 循环。实现简单、超参少、更稳。代价是离线偏好数据覆盖不到的场景泛化弱一些。业务上：有成对偏好就 DPO；要在线探索、复杂过程奖励才考虑 RL。</p>
+        </RagQuestion>
+
+        <RagQuestion num={15} title="你对 SFT 的理解？和预训练差在哪？">
+          <p>预训练学的是「续写世界」；SFT 用指令-回答把模型转到「按用户任务说话」。数据量小几个数量级，但格式和质量决定产品体验。Loss 只算回答 token，prompt 和 padding 要 mask。开发重点是数据清洗、比例均衡、与线上一致的工具 schema，而不是更大的学习率表。</p>
+        </RagQuestion>
+      </section>
+
+      <p class="source-note">题目来源：<a href="https://github.com/adongwanai/AgentGuide/blob/main/docs/04-interview/01-theory-questions.md" target="_blank" rel="noopener noreferrer">AgentGuide · 理论基础篇 ↗</a>。未收录手推公式、分布式并行细节和空题干的算法岗专题；需要 RAG 系统题见 <a href={`${import.meta.env.BASE_URL}agent/rag-interview`.replace(/\/+/g, '/')}>A03</a>。</p>
+    </main>
+  </div>
+</BaseLayout>
+
+<style>
+  .source-note {
+    margin: 8px 0 50px; padding-top: 18px; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: 12.5px;
+  }
+  .source-note a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+</style>

@@ -74,6 +74,34 @@ npm run preview  # 本地预览构建结果
 | [`skills/workspace-helper/SKILL.md`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/react-agent-loop/skills/workspace-helper/SKILL.md) | 页面示例使用的工作区操作 Skill |
 | [`workspace/`](https://github.com/shoujche/algorithm-notes/tree/main/src/code/agent/react-agent-loop/workspace) | 三个入口与 CLI 的默认工作区（唯一挂载进容器的可写目录，内容不入库） |
 
+- Agent 理论基础章节源码：[`src/code/agent/agent-theory/`](https://github.com/shoujche/algorithm-notes/tree/main/src/code/agent/agent-theory)
+
+| 文件 | 说明 |
+| --- | --- |
+| [`decode.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-theory/decode.py) | Top-P（Nucleus）采样：按累积概率选出候选 token |
+
+- RAG 面试章节源码：[`src/code/agent/rag-interview/`](https://github.com/shoujche/algorithm-notes/tree/main/src/code/agent/rag-interview)
+
+| 文件 | 说明 |
+| --- | --- |
+| [`chunking.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/rag-interview/chunking.py) | 带重叠的滑动窗口切块 |
+| [`rrf.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/rag-interview/rrf.py) | Reciprocal Rank Fusion：融合多路排序 |
+| [`time_decay.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/rag-interview/time_decay.py) | 相关性与时间新鲜度组合排序 |
+| [`retrieval_pipeline.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/rag-interview/retrieval_pipeline.py) | 召回、过滤、组装生成上下文的最小骨架 |
+
+- Agent 手撕代码章节源码：[`src/code/agent/agent-hands-on/`](https://github.com/shoujche/algorithm-notes/tree/main/src/code/agent/agent-hands-on)
+
+| 文件 | 说明 |
+| --- | --- |
+| [`react_agent.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-hands-on/react_agent.py) | 最小 ReAct 循环：Thought → Action → Observation，模型输出用规则模拟 |
+| [`tool_registry.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-hands-on/tool_registry.py) | 按名字查找工具、校验参数、统一执行 |
+| [`memory.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-hands-on/memory.py) | 短期对话列表与演示用哈希向量检索，不接外部 API |
+| [`cot.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-hands-on/cot.py) | Chain-of-Thought prompt 与最终答案抽取 |
+| [`reflection.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-hands-on/reflection.py) | 草稿、检查清单打分、带批评重写 |
+| [`chunking.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-hands-on/chunking.py) | 固定窗口、重叠窗口、按段落/句子边界切块 |
+
+Agent 核心真题（A04）是问答页，没有单独源码文件。
+
 ## 新增章节
 
 完整流程已固化为 Cursor Skill：[`.cursor/skills/add-algo-chapter`](.cursor/skills/add-algo-chapter/SKILL.md)（登记章节 → 写真实源码 → 建页面/图解/动画 → 更新 README → 构建校验 → 评审后推送）。

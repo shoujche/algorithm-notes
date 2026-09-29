@@ -1,0 +1,263 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import RagQuestion from '../../components/RagQuestion.astro';
+import Interview from '../../components/Interview.astro';
+import { chapters } from '../../data/topics';
+
+const chapter = chapters.find((item) => item.slug === 'agent-interview')!;
+---
+<BaseLayout title="Agent 核心真题 · Agent · 算法、Python 与 Agent 学习手记" active="agent">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Agent / {chapter.num} · Agent 核心真题</span>
+        <h2>开发岗怎么讲 <em>Agent</em>：<br />循环、工具、护栏</h2>
+        <p>题目来自 <a class="chapter-link" href="https://github.com/adongwanai/AgentGuide/blob/main/docs/04-interview/03-agent-questions.md">AgentGuide · Agent 核心篇</a>。答案只保留开发岗：架构、记忆、工具容错、并发隔离、安全。微调数据集、具身、LoRA 冻层、Toolformer 训练等算法岗题不展开。白板代码见 <a class="chapter-link" href={`${import.meta.env.BASE_URL}agent/agent-hands-on`.replace(/\/+/g, '/')}>A05</a>。</p>
+        <div class="meta">
+          <div><span class="n">开发岗</span><span class="l">Focus</span></div>
+          <div><span class="n">7</span><span class="l">Groups</span></div>
+          <div><span class="n">ReAct</span><span class="l">Core</span></div>
+          <div><span class="n">Safety</span><span class="l">Guardrails</span></div>
+        </div>
+      </div>
+
+      <section class="article" id="basics">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="基础 · Q1–Q3、Q35" /></div>
+        <h3>定义、ReAct、规划</h3>
+
+        <RagQuestion num={1} title="如何定义 LLM Agent？核心组件有哪些？">
+          <p class="exam"><b>开发岗考点：</b>Agent = 模型 + 循环 + 工具 + 记忆 + 策略，模型不能直接碰副作用。</p>
+          <p>基于 LLM 的 Agent 是：在限制步数内，根据目标反复「想 → 调工具 → 看结果」，直到给出答案或失败。组件通常是：规划/推理、工具接口、短期上下文、长期记忆、策略（允许/拒绝/审批）、观测与退出条件。</p>
+        </RagQuestion>
+
+        <RagQuestion num={2} title="详细解释 ReAct，它怎么把思维链和行动结合起来？">
+          <p>ReAct 把 CoT 的「想」和工具的「做」写成同一条轨迹：Thought 决定下一步，Action 是结构化调用，Observation 是环境返回，再进入下一 Thought。复杂任务被拆成可观察的多步，而不是一次生成到底。</p>
+          <p>工程上协议要能解析；未知动作当错误观察；必须 <kbd>max_steps</kbd>、超时。生产实现见 A01，白板见 A05。</p>
+        </RagQuestion>
+
+        <RagQuestion num={3} title="规划能力有哪些主流方法？CoT / ToT / GoT">
+          <table>
+            <thead><tr><th>方法</th><th>开发怎么用</th></tr></thead>
+            <tbody>
+              <tr><td>CoT</td><td>Prompt 里要求分步，默认就够大多数工具调用</td></tr>
+              <tr><td>ToT</td><td>多分支搜索，贵；只给高价值规划题</td></tr>
+              <tr><td>GoT</td><td>图状合并子结果，实现重，少作为默认</td></tr>
+              <tr><td>Planner-Executor</td><td>先产出步骤列表再逐步执行，步骤可展示、可打断</td></tr>
+            </tbody>
+          </table>
+          <p>产品默认：ReAct + 工具。规划失败就缩小目标或问人，不要上搜索树硬顶延迟。</p>
+        </RagQuestion>
+
+        <RagQuestion num={35} title="Agent 整体流程包括哪些模块？">
+          <p>接入鉴权 → 会话状态 → 意图/是否需要工具 → ReAct 循环（策略过滤工具）→ 记忆读写 → 流式输出 → 打点。和「一个 chat completion」的差别就是循环、工具和退出条件都是你的代码。</p>
+        </RagQuestion>
+      </section>
+
+      <section class="article" id="memory">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="mid" text="记忆 · Q4、Q20–Q21、Q41" /></div>
+        <h3>短期对话与长期检索</h3>
+
+        <RagQuestion num={4} title="如何设计短期记忆和长期记忆？">
+          <p>短期：当前会话 token 窗口，滚动摘要，超出就压成摘要块。长期：用户偏好、已解决问题写入向量库或 KV（user_id 分区）。工具可用 Redis 会话、Postgres 事件、向量库做语义回忆。</p>
+        </RagQuestion>
+
+        <RagQuestion num={20} title="历史很大时怎么优化查询？">
+          <p>不要把全历史塞进 Prompt。近期 N 轮明文 + 摘要 + 按当前问题检索 Top-K。索引带 user_id、时间；热数据缓存；冷数据对象存储。查询走过滤再 ANN，避免全表扫描。</p>
+        </RagQuestion>
+
+        <RagQuestion num={21} title="有没有记忆衰退，避免旧数据干扰？">
+          <p>开发岗用策略而不是「遗忘模型」：时间衰减、任务切换清空工作记忆、冲突时以用户最新纠正为准、过期键 TTL。重要事实要版本号，不要静默用一年前的地址。</p>
+        </RagQuestion>
+
+        <RagQuestion num={41} title="记忆为什么常用向量库？embedding 和检索怎么设计？">
+          <p>自然语言回忆是模糊匹配，向量比 SQL LIKE 合适。设计：同一用户命名空间、chunk 带时间/标签、query 用当前问题+最近一轮、K 要小、写入前去 PII。精确字段（订单号）走结构化存储，不要全塞向量。</p>
+        </RagQuestion>
+      </section>
+
+      <section class="article" id="tools">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="mid" text="工具 · Q5、Q28–Q29、Q38–Q40、Q45、Q51" /></div>
+        <h3>工具怎么接、失败怎么办</h3>
+
+        <RagQuestion num={5} title="LLM 如何学会调用外部工具？从 Function Calling 讲">
+          <p>你提供 schema；模型只输出 name + arguments；宿主校验、鉴权、执行，再把结果当 Observation。训练侧的「学会」对开发岗就是：选支持 tool calling 的模型、把工具描述写清楚、用错误观察教下一轮纠正。模型提案 ≠ 已执行。</p>
+        </RagQuestion>
+
+        <RagQuestion num={38} title="客服 Agent 如何判断要不要调外部 API？">
+          <p>稳定意图用规则或小分类器（查物流、改地址）；模糊才 LLM。高风险写操作即使模型说要调，也要策略放行。比「全靠 prompt 判断」更稳，也更好测。</p>
+        </RagQuestion>
+
+        <RagQuestion num={39} title="如何避免工具参数格式错误？">
+          <p>JSON Schema 校验；失败把校验器报错回灌；约束解码或 tool_choice；枚举用工具侧白名单而不是自由文本。不要正则死磕模型散文。</p>
+        </RagQuestion>
+
+        <RagQuestion num={40} title="多个工具都能做时怎么选？">
+          <p>按意图路由表 + 工具描述；同能再比延迟、成本和是否只读。打分模块可有，但先做白名单和优先级配置，比再训一个 ranker 先上线。</p>
+        </RagQuestion>
+
+        <RagQuestion num={28} title="调用链上如何做故障容错和超时？">
+          <p>每工具独立 timeout、重试次数、幂等键；链路总预算；熔断。失败观察写明「超时/4xx/空」；禁止无限重试写接口。</p>
+        </RagQuestion>
+
+        <RagQuestion num={29} title="工具失败后的 feedback 策略？">
+          <p>把错误码和允许的下一步写进 Observation：换参数、换工具、问用户、放弃。同一错误连续两次就停，避免换着法子把坏请求打满。</p>
+        </RagQuestion>
+
+        <RagQuestion num={45} title="API 超时或空返回时，有没有重试、降级、澄清？">
+          <p>读接口可有限重试；写接口先查幂等再决定。空结果要澄清「没查到」而不是编。降级：缓存、只读库、人工队列。</p>
+        </RagQuestion>
+
+        <RagQuestion num={51} title="工具设计是不是 workflow 形式？">
+          <p>两种都要会：LLM 选工具适合探索；固定 workflow 适合支付、开票。高风险路径用图/状态机，LLM 只填槽或解释，不要让模型自由编排资金流。</p>
+        </RagQuestion>
+      </section>
+
+      <section class="article" id="frameworks">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="base" text="框架 · Q7–Q8、Q27、Q49" /></div>
+        <h3>选型、隔离、线程安全</h3>
+
+        <RagQuestion num={7} title="LangChain 和 LlamaIndex 场景有何不同？（同 Q49）">
+          <table>
+            <thead><tr><th></th><th>更擅长</th></tr></thead>
+            <tbody>
+              <tr><td>LangChain / LangGraph</td><td>工具、多步 Agent、图编排、HITL</td></tr>
+              <tr><td>LlamaIndex</td><td>文档索引、检索、知识库问答</td></tr>
+            </tbody>
+          </table>
+          <p>RAG 为主先看 LlamaIndex 或自研检索；要循环和工具先看 LangGraph 或自研循环。核心协议不要绑死框架。</p>
+        </RagQuestion>
+
+        <RagQuestion num={8} title="你怎么选型？评价指标是什么？">
+          <p>指标：任务成功率、工具正确率、有害操作拦截率、P95、单请求成本、人工介入率。选型看能否插你们的鉴权、日志和沙盒，而不是 demo 好看。</p>
+        </RagQuestion>
+
+        <RagQuestion num={27} title="LangChain memory 多用户怎么隔离？线程安全？">
+          <p>默认内存 Memory 不能当多租户存储。会话键必须是 <kbd>user_id + conversation_id</kbd>，落到 Redis/DB。请求级上下文用 contextvars，不要全局 list。工具客户端线程安全或每请求新建。</p>
+        </RagQuestion>
+      </section>
+
+      <section class="article" id="multi">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="hard" text="协作 · Q9–Q10、Q18–Q19、Q34、Q36" /></div>
+        <h3>Multi-Agent</h3>
+
+        <RagQuestion num={9} title="多智能体相对单 Agent 的优势和复杂性？">
+          <p>优势：角色拆分、并行调研、互相检查。复杂性：延迟和费用翻倍、职责不清会互相甩锅、状态一致性、提示注入在 Agent 间传播。不到单 Agent 搞不定，不要上多 Agent。</p>
+        </RagQuestion>
+
+        <RagQuestion num={10} title="A2A 和普通 Agent 框架最关键的不同？">
+          <p>普通框架管的是<b>一个应用内部</b>的工具循环。A2A 强调<b>不同 Agent 作为独立服务互发现、互调</b>。最关键：跨应用的身份和任务协议，而不是又一个 Prompt 模板。</p>
+        </RagQuestion>
+
+        <RagQuestion num={18} title="举一个协同机制例子">
+          <p>旅行：Planner 拆任务 → Search 订交通住宿（只读）→ Budget 核对 → Writer 出行程。主持人持有状态机；写操作只允许一个 Agent 在审批后执行。</p>
+        </RagQuestion>
+
+        <RagQuestion num={19} title="误判导致策略冲突怎么处理？">
+          <p>冲突检测（两工具互斥、重复下单）→ 冻结副作用 → 按优先级或问人 → 记录审计。不要让两个 Agent 同时改同一资源。</p>
+        </RagQuestion>
+
+        <RagQuestion num={34} title="异步任务如何保证稳定性和结果一致性？">
+          <p>任务队列 + 幂等键 + 状态机（queued/running/done/failed）；结果写入会话版本号。用户看到的答案以已提交状态为准，迟到的工具结果只能追加不能偷偷改已展示结论，除非显式刷新。</p>
+        </RagQuestion>
+
+        <RagQuestion num={36} title="子 Agent 回复不对、跳不出去怎么办？">
+          <p>反思一轮 → 不行就换策略或升级人工；硬限制轮数和费用。禁止「再想想」死循环。跳不出时返回已收集证据和失败原因。</p>
+        </RagQuestion>
+      </section>
+
+      <section class="article" id="safety">
+        <div class="art-head"><span class="num">06</span><LcBadge kind="hard" text="安全 · Q11、Q13、Q46" /></div>
+        <h3>挑战、对齐、隐私</h3>
+
+        <RagQuestion num={11} title="构建复杂 Agent 最主要的挑战？">
+          <p>开发岗最痛的是<b>不可靠的工具选择 + 不可控的副作用 + 难以复盘</b>。模型偶发聪明掩盖了超时、越权和不可测。优先：策略层、可观测性、缩小工具面。</p>
+        </RagQuestion>
+
+        <RagQuestion num={13} title="如何保证安全、可控、符合意图？">
+          <ul>
+            <li>工具 deny-by-default，写操作审批。</li>
+            <li>参数 schema 与配额；检索文本当数据。</li>
+            <li>人机确认、会话审计、一键撤销。</li>
+          </ul>
+        </RagQuestion>
+
+        <RagQuestion num={46} title="如何防止泄露隐私或越权？">
+          <p>系统层：鉴权在工具内再查一遍资源 ACL；日志脱敏；Prompt 不放密钥。算法层：记忆分区、最小检索范围。越权不是靠模型「答应不看别人的数据」。</p>
+        </RagQuestion>
+      </section>
+
+      <section class="article" id="prod">
+        <div class="art-head"><span class="num">07</span><LcBadge kind="mid" text="真题 · 工程" /></div>
+        <h3>调度、评估、场景、迭代</h3>
+
+        <RagQuestion num={16} title="大规模 Agent 多线程/多进程如何调度？">
+          <p>用户请求进网关限流；每会话一条执行队列避免同会话并发写；工具调用线程池/异步；CPU 与 GPU 任务分开。用队列长度和 P95 做反压，不要来一个请求就新开一个无限循环。</p>
+        </RagQuestion>
+
+        <RagQuestion num={17} title="有限 GPU 上同时推理和微调怎么分配？">
+          <p>推理优先：独占小池保 SLO，微调用抢占或低谷窗口。不要同一张卡混 batch。实在共享就给推理预留显存水位，微调用梯度累积降峰值。</p>
+        </RagQuestion>
+
+        <RagQuestion num={24} title="响应速度和精度怎么权衡？先召回再精排还是一次生成？">
+          <p>默认先粗召回再精排再生成，这是成本和质量的标准折中。极低延迟走缓存或跳过精排；高风险走更重 rerank。用分级：简单意图直出，复杂才多步。</p>
+        </RagQuestion>
+
+        <RagQuestion num={25} title="电商 Agent 用哪些模态输入？">
+          <p>交易与库存以结构化记录为准；评论文本做偏好；主图/短视频辅助理解商品；不要让模型「看图编库存」。权限内的订单史优先于公开评论。</p>
+        </RagQuestion>
+
+        <RagQuestion num={26} title="Prompt 怎么迭代？不完整请求如何补全意图？">
+          <p>版本化 Prompt，用固定评测集看成功率/工具正确率。不完整就槽位检测 + 澄清问句，缺必填槽不调写工具。自动优化（DSPy 一类）只能在离线集上跑，上线要人审。</p>
+        </RagQuestion>
+
+        <RagQuestion num={30} title="多轮状态在高并发下如何一致？">
+          <p>会话状态存在 DB，乐观锁/版本号；同一 conversation_id 串行化执行。缓存可作只读加速，写回以 DB 为准。</p>
+        </RagQuestion>
+
+        <RagQuestion num={31} title="推理 API 要低延迟，系统怎么优化？">
+          <p>流式首 token、连接复用、前缀缓存、小模型路由、工具并行、缩 Prompt、语义缓存。先 trace 再优化最长段。</p>
+        </RagQuestion>
+
+        <RagQuestion num={37} title="Agent 怎么评估效果？">
+          <p>离线：标注任务成功率、工具选择/参数正确、违规操作率。线上：人工差评、拦截率、延迟、成本。再加轨迹回放。准确率单独不够。</p>
+        </RagQuestion>
+
+        <RagQuestion num={42} title="上线后如何收集 bad case 并迭代？要不要在线学习？">
+          <p>采样失败轨迹，聚类后改工具描述、策略或检索。在线学习直接更新权重风险高；开发岗用离线回放 + 定期发版。用户纠正写入记忆要审核。</p>
+        </RagQuestion>
+
+        <RagQuestion num={44} title="旅行行程 Agent 如何拆任务、分子 Agent？">
+          <p>约束收集 → 交通 → 住宿 → 日程 → 预算核对 → 出文档。子 Agent 只读搜索；下单集中在一个带审批的 Executor。失败时保留已确认项，不要整单作废却不告诉用户。</p>
+        </RagQuestion>
+
+        <RagQuestion num={47} title="用户追问「为什么选这家酒店」如何回溯？">
+          <p>每步决策落结构化日志：候选列表、分数、用到的约束。回答时复述日志而不是再让模型编理由。没有日志就没有可解释性。</p>
+        </RagQuestion>
+
+        <RagQuestion num={48} title="如何评估鲁棒性？还要测哪些边缘 case？">
+          <p>工具超时、空结果、恶意 Prompt、越权资源 ID、重复下单、超长会话、并发双请求。看失败是否安全停止，而不只看 happy path 准确率。</p>
+        </RagQuestion>
+
+        <RagQuestion num={50} title="如何保证模型输出稳定 JSON？">
+          <p>tool calling / JSON mode；Pydantic 校验失败回灌；必要时约束解码。业务字段用枚举。解析失败不要把半截 JSON 往下游传。</p>
+        </RagQuestion>
+
+        <Interview q="原题库里 Q6/Q12/Q15/Q22/Q23/Q32/Q43/Q52 为什么不写长答案？">
+          <p>那些是微调数据、具身、冻哪些层、RL 更新策略、Toolformer 训练。开发岗一句话：工具对错靠 schema、评测和策略修，不靠现场推 RL 公式。需要行为改变再走离线 SFT/DPO，见 A02。</p>
+        </Interview>
+      </section>
+
+      <p class="source-note">题目来源：<a href="https://github.com/adongwanai/AgentGuide/blob/main/docs/04-interview/03-agent-questions.md" target="_blank" rel="noopener noreferrer">AgentGuide · Agent 核心篇 ↗</a>。手撕实现见 <a class="chapter-link" href={`${import.meta.env.BASE_URL}agent/agent-hands-on`.replace(/\/+/g, '/')}>A05</a>。</p>
+    </main>
+  </div>
+</BaseLayout>
+
+<style>
+  .chapter-link, .source-note a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+  .source-note {
+    margin: 8px 0 50px; padding-top: 18px; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: 12.5px;
+  }
+</style>

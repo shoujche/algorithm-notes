@@ -1,0 +1,119 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import { chapters } from '../../data/topics';
+import {
+  CODE_DIR,
+  chunking,
+  cot,
+  memory,
+  reactAgent,
+  reflection,
+  toolRegistry,
+} from '../../data/agent-hands-on-code';
+import { ghBlob } from '../../lib/github';
+
+const chapter = chapters.find((item) => item.slug === 'agent-hands-on')!;
+const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
+---
+<BaseLayout title="Agent 手撕代码 · Agent · 算法、Python 与 Agent 学习手记" active="agent">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Agent / {chapter.num} · Agent 手撕代码</span>
+        <h2>白板上能写完的 <em>Agent</em></h2>
+        <p>五道手撕都是最小可运行 Python：不接真实模型、不放密钥。生产级循环、审批和沙盒见 <a class="chapter-link" href={`${import.meta.env.BASE_URL}agent/react-agent-loop`.replace(/\/+/g, '/')}>A01</a>。</p>
+        <div class="meta">
+          <div><span class="n">5</span><span class="l">Hands-on</span></div>
+          <div><span class="n">ReAct</span><span class="l">Loop</span></div>
+          <div><span class="n">Memory</span><span class="l">Short + Long</span></div>
+          <div><span class="n">Chunk</span><span class="l">3 Strategies</span></div>
+        </div>
+      </div>
+
+      <section class="article" id="react">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="mid" text="手撕 · ReAct" /></div>
+        <h3>手撕 ReAct Agent</h3>
+        <p class="lead">实现 Thought → Action → Observation 循环，直到 Finish 或步数用尽。</p>
+        <Idea>
+          面试只要求三件事写对：
+          <ol class="steps">
+            <li>模型输出是文本协议，不是直接执行。</li>
+            <li>Action 解析后走 Tool Registry，Observation 写回 trace。</li>
+            <li>必须有 <kbd>max_steps</kbd>，防止死循环。</li>
+          </ol>
+        </Idea>
+        <div class="loop" aria-label="ReAct 循环">
+          <span>Thought</span><i>→</i><span>Action</span><i>→</i><span>Observation</span><i>→</i><span>Finish</span>
+        </div>
+        <CodeBlock code={reactAgent} lang="python" file="react_agent.py" src={src('react_agent.py')} />
+      </section>
+
+      <section class="article" id="registry-memory">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="mid" text="手撕 · Registry + Memory" /></div>
+        <h3>Tool Registry 与短长期记忆</h3>
+        <p class="lead">工具按名字注册、校验必填参数；短期记忆是有上限的对话队列，长期记忆用演示用哈希向量检索。</p>
+        <Idea>
+          <ol class="steps">
+            <li>未知工具和缺参返回错误字符串，让下一轮 Thought 能看到。</li>
+            <li>短期记忆 <kbd>deque(maxlen)</kbd>，避免 Prompt 无限涨。</li>
+            <li>长期记忆存 embedding；白板用哈希向量即可说明「检索再注入」。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={toolRegistry} lang="python" file="tool_registry.py" src={src('tool_registry.py')} />
+        <CodeBlock code={memory} lang="python" file="memory.py" src={src('memory.py')} />
+      </section>
+
+      <section class="article" id="cot">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="base" text="手撕 · CoT" /></div>
+        <h3>Chain-of-Thought Prompting</h3>
+        <p class="lead">用系统约定和 few-shot 逼模型先分步，再从 <kbd>Answer:</kbd> 抽最终答案。</p>
+        <Idea>
+          CoT 不是新模型，是提示协议。少样本里示范「步骤 + 答案行」，解析时只信最后一行 Answer，避免把推理过程当结果。
+        </Idea>
+        <CodeBlock code={cot} lang="python" file="cot.py" src={src('cot.py')} />
+      </section>
+
+      <section class="article" id="reflect">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="手撕 · Reflection" /></div>
+        <h3>Self-Reflection 自我反思</h3>
+        <p class="lead">草稿 → 检查清单 → 不通过则带批评重写，限制轮数。</p>
+        <Idea>
+          反思要可停止：最大轮数、检查项写死在代码里。生产上批评器也是模型，但白板用规则打分更能讲清控制流。
+        </Idea>
+        <CodeBlock code={reflection} lang="python" file="reflection.py" src={src('reflection.py')} />
+      </section>
+
+      <section class="article" id="chunk">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="base" text="手撕 · Chunking" /></div>
+        <h3>固定大小、重叠、语义切块</h3>
+        <p class="lead">语义切块这里按段落和句子边界打包，不接 embedding 模型。</p>
+        <Idea>
+          <ol class="steps">
+            <li>固定窗口实现最快，容易切断句子。</li>
+            <li>重叠保住跨窗口信息，索引变大。</li>
+            <li>语义切先按 <kbd>\n\n</kbd> 和句号，再凑满 max_size。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={chunking} lang="python" file="chunking.py" src={src('chunking.py')} />
+      </section>
+    </main>
+  </div>
+</BaseLayout>
+
+<style>
+  .loop {
+    display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap;
+    margin: 16px 0; padding: 16px; border: 1px solid var(--line); border-radius: 14px;
+    background: var(--surface);
+  }
+  .loop span {
+    padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--paper);
+  }
+  .loop i { color: var(--muted); font-style: normal; }
+  .chapter-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+</style>

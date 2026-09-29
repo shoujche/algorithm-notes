@@ -1,0 +1,290 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import RagQuestion from '../../components/RagQuestion.astro';
+import Interview from '../../components/Interview.astro';
+import { chapters } from '../../data/topics';
+import {
+  CODE_DIR,
+  chunking,
+  retrievalPipeline,
+  rrf,
+  timeDecay,
+} from '../../data/rag-interview-code';
+import { ghBlob } from '../../lib/github';
+
+const chapter = chapters.find((item) => item.slug === 'rag-interview')!;
+const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
+---
+<BaseLayout title="RAG 面试真题 · Agent · 算法、Python 与 Agent 学习手记" active="agent">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Agent / {chapter.num} · RAG 面试真题</span>
+        <h2>开发岗怎么讲 <em>RAG</em>：<br />流水线、取舍、能上线</h2>
+        <p>22 道题来自 AgentGuide。答案按理论基础篇同款结构：先考点，再分段展开，能对比就列表，最后加分追问。只保留开发岗口径——怎么建索引、怎么混合检索、怎么控延迟和权限，不讲算法岗的公式推导和训练细节。</p>
+        <div class="meta">
+          <div><span class="n">22</span><span class="l">Questions</span></div>
+          <div><span class="n">开发岗</span><span class="l">Focus</span></div>
+          <div><span class="n">4</span><span class="l">Code Examples</span></div>
+          <div><span class="n">RAG</span><span class="l">To Production</span></div>
+        </div>
+      </div>
+
+      <section class="article" id="core">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="核心原理 · Q1–Q4" /></div>
+        <h3>先把完整链路讲明白</h3>
+        <p class="lead">面试官要听的是：RAG 补的是知识不是文风；离线和在线各干什么；切块和 embedding 会怎样拖垮线上。</p>
+
+        <div class="rag-flow" aria-label="RAG 端到端流程">
+          <div><b>离线</b><span>文档清洗</span><i>→</i><span>切块</span><i>→</i><span>Embedding</span><i>→</i><span>索引</span></div>
+          <div><b>在线</b><span>用户问题</span><i>→</i><span>召回</span><i>→</i><span>过滤 / 重排</span><i>→</i><span>LLM + 引用</span></div>
+        </div>
+
+        <RagQuestion num={1} title="解释 RAG 原理；与直接微调相比解决什么问题？">
+          <p class="exam"><b>开发岗考点：</b>知识更新、引用、权限隔离、和 SFT 的分工。</p>
+          <p>RAG = 推理时先从外部知识库取证据，再和问题一起交给 LLM。模型负责组织语言，事实来自你可控的语料。</p>
+          <ul>
+            <li><b>解决：</b>知识截止日期、私域文档、幻觉难追溯、不同租户看到不同资料。</li>
+            <li><b>相对微调：</b>改文档就能更新，不必重训；能带引用；成本是检索和上下文 token，不是 GPU 周。</li>
+            <li><b>微调仍要：</b>改口吻、JSON 格式、工具调用习惯。常见组合是「SFT 管行为 + RAG 管知识」。</li>
+          </ul>
+          <Interview q="什么时候不该上 RAG？">
+            <p>纯闲聊、知识已在模型里且不要求引用、延迟预算极紧、或者语料几乎不可解析时。先把解析和权限做对，再接向量库。</p>
+          </Interview>
+        </RagQuestion>
+
+        <RagQuestion num={2} title="完整 RAG 流水线包含哪些关键步骤？">
+          <p class="exam"><b>开发岗考点：</b>离线可重放、在线可降级、全程有日志。</p>
+          <ol>
+            <li><b>离线：</b>接入源 → 解析/OCR → 清洗去重 → 按结构切块 → 写入来源/时间/ACL 元数据 → embedding → 稀疏索引 + 向量索引。每一步要记 pipeline version。</li>
+            <li><b>在线：</b>鉴权 → 意图/改写 → 多路召回 → 服务端 ACL 过滤 → 去重 rerank → 按 token 预算拼上下文 → 带引用生成 → 失败则缩短上下文或拒答。</li>
+            <li><b>闭环：</b>落 query、候选 ID、分数、引用、耗时。没有这些，线上质量问题无法复盘。</li>
+          </ol>
+        </RagQuestion>
+
+        <RagQuestion num={3} title="如何选择切块大小和重叠长度？">
+          <p>块太小语义被切断，召回一堆碎片；块太大主题混杂、占满窗口、延迟变高。重叠保住跨段句子，但索引变大、重复命中变多。</p>
+          <p><b>开发实践：</b>先按标题、段落、代码函数切，不要只按字符硬切。用目标模型的 tokenizer 计量。从 200–500 token、10%–20% overlap 起步，用「答案是否被召回、上下文 token、P95」一起调。表格、FAQ、代码各用专门切法；切完抽几条人工看，比先调参重要。</p>
+          <CodeBlock code={chunking} lang="python" file="chunking.py" src={src('chunking.py')} />
+        </RagQuestion>
+
+        <RagQuestion num={4} title="如何选择 Embedding 模型？怎么评估？">
+          <p>先看约束：中文效果、最大长度、维度（影响内存）、许可证、是否可私有化、编码 QPS。再用你们真实 query–文档对打榜，不要只看 MTEB。</p>
+          <table>
+            <thead><tr><th>看什么</th><th>为什么</th></tr></thead>
+            <tbody>
+              <tr><td>业务召回：命中率、MRR</td><td>用户问题能不能找到那篇文档</td></tr>
+              <tr><td>P95 编码/检索延迟、索引体积</td><td>直接影响成本和容量</td></tr>
+              <tr><td>换模型必须全量重建</td><td>向量空间不同，新旧不能混在一个 collection</td></tr>
+            </tbody>
+          </table>
+        </RagQuestion>
+      </section>
+
+      <section class="article" id="retrieval">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="mid" text="检索优化 · Q5–Q7" /></div>
+        <h3>召回要广，排序要准</h3>
+        <p class="lead">生产默认不是「只向量 Top-K」，而是多路召回再融合、过滤、精排。</p>
+
+        <div class="fusion">
+          <span>BM25<br /><small>编号 / 专名</small></span>
+          <b>+</b>
+          <span>Vector<br /><small>同义 / 语义</small></span>
+          <b>→</b>
+          <span>RRF<br /><small>融合排名</small></span>
+          <b>→</b>
+          <span>Reranker<br /><small>精排 Top-N</small></span>
+        </div>
+
+        <RagQuestion num={5} title="除了向量检索，还有哪些技术提升检索质量？">
+          <p class="exam"><b>开发岗考点：</b>混合检索、查询改写、元数据过滤、rerank。不必展开 hard-negative 训练。</p>
+          <ul>
+            <li><b>混合检索：</b>BM25 吃错误码、工单号；向量吃同义说法。RRF 按排名融合，实现简单，线上常用。</li>
+            <li><b>查询：</b>拼写纠正、同义扩展、HyDE（先让模型写假设答案再检索）、复杂问题拆成子查询。</li>
+            <li><b>过滤：</b>租户、时间、文档类型在检索前做，不要召回后再在应用层漏筛。</li>
+            <li><b>精排：</b>召回 50–100 条，用 cross-encoder 或小模型打分留 4–8 条进 Prompt。</li>
+          </ul>
+          <CodeBlock code={rrf} lang="python" file="rrf.py" src={src('rrf.py')} />
+        </RagQuestion>
+
+        <RagQuestion num={6} title="什么是 Lost in the Middle？工程上怎么缓解？">
+          <p>长 Prompt 里，模型更吃开头和结尾，中间的关键证据容易被忽略。所以「多塞几段」常常让答案更差、更贵。</p>
+          <ul>
+            <li>rerank 后再截断，K 宁小勿大。</li>
+            <li>最相关的 1–2 段放开头和结尾，中间放次相关。</li>
+            <li>先摘要/压缩证据，或多轮按子问题检索，而不是一次塞 20 段。</li>
+            <li>要求按编号引用；评测集里把黄金证据故意放在中间，看系统会不会丢。</li>
+          </ul>
+        </RagQuestion>
+
+        <RagQuestion num={7} title="什么时候用图数据库，而不是只上向量库？">
+          <p>当用户问的是<b>关系、路径、多跳</b>，语义相似找不齐时：组织汇报线、服务依赖、零件替代、合同主体关系。FAQ、政策问答、文档搜索用向量 + BM25 就够，不要为了名词上 Neo4j。</p>
+          <p>开发路径：先有可靠实体抽取和唯一 ID，再图遍历，最后用向量补描述文本。维护成本在 schema、更新和权限，不在「GraphRAG」这个词。</p>
+        </RagQuestion>
+      </section>
+
+      <section class="article" id="evaluation">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="hard" text="评估与进阶 · Q8–Q9" /></div>
+        <h3>把「检索错」和「生成错」分开</h3>
+
+        <RagQuestion num={8} title="如何全面评估一个 RAG 系统？">
+          <p>先分阶段，否则改模型改索引都像碰运气。</p>
+          <table>
+            <thead><tr><th>阶段</th><th>开发要盯的指标</th></tr></thead>
+            <tbody>
+              <tr><td>检索</td><td>黄金文档是否进 Top-K、权限是否漏召回、空结果率</td></tr>
+              <tr><td>生成</td><td>答案是否被引用支撑、该拒答时有没有拒、格式是否稳定</td></tr>
+              <tr><td>系统</td><td>P50/P95、token/请求、缓存命中、错误率、索引新鲜度</td></tr>
+            </tbody>
+          </table>
+          <p>评测集要有「可回答 / 不可回答 / 无权限」。LLM judge 必须用少量人工题校准，不能当唯一上线门槛。</p>
+        </RagQuestion>
+
+        <RagQuestion num={9} title="多次检索、自适应 RAG 怎么用才不炸延迟？">
+          <p>Naive RAG 是检索一次再生成。复杂问题可以：按意图路由（搜文档 / 查 SQL / 不检索）、中间结果差就改写再搜、Agent 多轮搜。</p>
+          <p><b>开发护栏：</b>最大检索轮数、总超时、token 预算、每轮打点。默认仍是单次混合检索；只有明确多跳任务才开循环。循环失败要降级到「只根据已有证据回答或拒答」，不要空转。</p>
+        </RagQuestion>
+      </section>
+
+      <section class="article" id="engineering">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="工程实践 · Q10–Q12、Q21" /></div>
+        <h3>生产系统关心正确、快、稳、可控</h3>
+
+        <RagQuestion num={10} title="RAG 实际部署会遇到哪些挑战？">
+          <ul>
+            <li><b>数据：</b>PDF 解析烂、图片表格丢、增量同步乱、删除未 tombstone。</li>
+            <li><b>质量：</b>检索不准、上下文太长、幻觉、引用对不上。</li>
+            <li><b>安全：</b>ACL 必须在服务端过滤；检索文本当数据不当指令，防提示注入。</li>
+            <li><b>运行：</b>峰值延迟、embedding 队列、索引重建窗口、成本。</li>
+          </ul>
+          <p>最低配置：可重放的索引流水线、query 级 tracing、超时降级、拒答策略。没有日志的 RAG 无法运维。</p>
+        </RagQuestion>
+
+        <RagQuestion num={11} title="搜索系统和 RAG 有什么区别？">
+          <p>搜索交付的是<b>排序列表</b>，用户自己点开判断。RAG 交付的是<b>合成答案</b>，多了拼上下文、生成、引用和事实一致性。RAG 内部通常就嵌着一套搜索。</p>
+          <p>需要浏览、对比多篇、合规留痕时，把原结果列表一起展示。只给一段总结却藏源文档，出了错用户无法核查。</p>
+        </RagQuestion>
+
+        <RagQuestion num={12} title="开源 RAG 框架怎么选？">
+          <table>
+            <thead><tr><th>方向</th><th>更适合</th></tr></thead>
+            <tbody>
+              <tr><td>RAGFlow</td><td>要解析 + 知识库 UI、少写胶水代码</td></tr>
+              <tr><td>LlamaIndex</td><td>数据连接、索引抽象快速原型</td></tr>
+              <tr><td>LangChain / LangGraph</td><td>多步 Agent 编排</td></tr>
+              <tr><td>Haystack</td><td>管线组件化、检索服务化</td></tr>
+              <tr><td>Milvus / Qdrant / pgvector</td><td>只需要向量存储时先选库</td></tr>
+            </tbody>
+          </table>
+          <p>先用真实 PDF 和权限模型做一周原型。切块、评测集、embedding 选型不要绑死在框架里，方便换引擎。</p>
+        </RagQuestion>
+
+        <RagQuestion num={21} title="高并发下如何优化召回和生成延迟？">
+          <ul>
+            <li><b>召回：</b>query embedding 缓存；BM25 与向量并行；ANN 参数换吞吐；元数据先过滤再算距离；小 Top-K 再批量 rerank。</li>
+            <li><b>生成：</b>压缩上下文、语义缓存、流式先吐首 token、简单问题路由小模型。</li>
+            <li><b>系统：</b>连接池、异步、限流背压、超时熔断；按 span 看是检索、rerank 还是 LLM。</li>
+          </ul>
+          <p>准备降级开关：跳过 rerank、减小 K、切小模型。质量门槛写进 SLO，不要只报平均延迟。</p>
+        </RagQuestion>
+      </section>
+
+      <section class="article" id="advanced">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="hard" text="进阶真题 · Q13–Q19、Q22" /></div>
+        <h3>把追问落到可上线的策略</h3>
+
+        <RagQuestion num={13} title="向量库怎么处理时间衰减？">
+          <p>新闻、公告要新鲜；手册、法条看生效期，不能一律指数衰减。开发上三招就够：</p>
+          <ol>
+            <li>过滤：只搜最近 N 天，或 <kbd>effective_from/to</kbd> 落在当前。</li>
+            <li>融合：相关分 + 新鲜度分，权重可配；新闻 λ 大，百科 λ 小。</li>
+            <li>双路：一路最相关、一路最新，再融合，避免新文档永远排不上。</li>
+          </ol>
+          <CodeBlock code={timeDecay} lang="python" file="time_decay.py" src={src('time_decay.py')} />
+        </RagQuestion>
+
+        <RagQuestion num={14} title="增量更新时如何避免新旧分布不一致？">
+          <p>本质是<b>同一套解析/切块/embedding 版本</b>。chunk 上打 pipeline version。换模型就建新 collection，后台回填，shadow 流量对比后原子切别名，绝不混写同一向量空间。</p>
+          <p>删除用 tombstone；同一文档多版本只留当前。监控新旧分区的召回来源占比和空结果，回填未完成时不要切全量。</p>
+        </RagQuestion>
+
+        <RagQuestion num={15} title="RAG 有噪声怎么办？">
+          <p>先分类：源文件脏、切块切碎、召回不相关、多文档冲突、网页提示注入。对应清洗、换切法、提高阈值、rerank、标明冲突、把检索结果当不可信数据。</p>
+          <p>生成侧：只根据编号证据答；证据不够就说不知道。权限在检索前做。不要指望一句 system prompt 挡住注入。</p>
+        </RagQuestion>
+
+        <RagQuestion num={16} title="用开发口径讲 BM25">
+          <p>BM25 是词面检索：查询词在文档里出现、词又比较稀有、文档别太注水，分数就高。它<b>不懂同义词</b>，但对工单号、函数名、产品名非常稳，所以和向量互补。</p>
+          <p>面试能说到「词频有饱和、有长度惩罚、稀有词权重大」即可，不必默写完整公式。线上用 Elasticsearch / OpenSearch 现成实现，调 <kbd>k1</kbd>/<kbd>b</kbd> 远不如先把分词和同义词词典做对。</p>
+        </RagQuestion>
+
+        <RagQuestion num={17} title="意图识别可以怎么做？">
+          <p>级联：规则挡住「查天气」这类稳定意图 → 小分类器/embedding 近邻吃主体流量 → 低置信再 LLM 或反问用户。输出要有意图、置信度、槽位（时间、系统、文档类型），直接作为检索路由。</p>
+          <p>低置信不要硬路由。日志里打意图分布，定期用线上 query 重标，防止新功能上线后意图漂移。</p>
+        </RagQuestion>
+
+        <RagQuestion num={18} title="检索优化里，子问题分解怎么做？">
+          <p>先意图：简单事实题不拆。比较题、多约束题才拆成有依赖的子查询，分别检索，去重后按原问题 rerank，最后综合。</p>
+          <p>护栏：限制子问题数量；每个子答案带引用；最后检查原约束有没有丢。拆错比不拆更糟，因为延迟和错误都会叠加。</p>
+        </RagQuestion>
+
+        <RagQuestion num={19} title="细讲「召回—过滤—生成」">
+          <ol>
+            <li><b>召回：</b>从全库快速拿几十到几百条，目标是别漏，用 BM25 + ANN 并行。</li>
+            <li><b>过滤：</b>ACL、时效、类型硬过滤 → 去重 → 分数阈值 → rerank，压到 Prompt 能装下的几条。</li>
+            <li><b>生成：</b>带来源编号的上下文、拒答规则、引用校验。过滤是权限和成本的闸门，不能省。</li>
+          </ol>
+          <CodeBlock code={retrievalPipeline} lang="python" file="retrieval_pipeline.py" src={src('retrieval_pipeline.py')} />
+        </RagQuestion>
+
+        <RagQuestion num={22} title="Agent 调搜索引擎时，如何避免无关结果带偏回答？">
+          <ul>
+            <li>搜前：改写、站点/时间限制、多查询去重。</li>
+            <li>搜后：域名白名单或信誉、语言、rerank 与原问题相关性。</li>
+            <li>网页当数据：去脚本和导航，检测注入，禁止网页文字改 system 或直接触发别的工具。</li>
+            <li>生成：低于阈值不用；来源冲突就陈述分歧；不够就停或追问。</li>
+          </ul>
+        </RagQuestion>
+      </section>
+
+      <section class="article" id="tools">
+        <div class="art-head"><span class="num">06</span><LcBadge kind="base" text="工具协议 · Q20" /></div>
+        <h3>Function Calling 与 MCP</h3>
+
+        <RagQuestion num={20} title="介绍 Function Calling 和 MCP">
+          <p class="exam"><b>开发岗考点：</b>模型只提案，宿主才执行；MCP 是工具接入协议，不是另一种模型 API。</p>
+          <p><b>Function Calling：</b>你提供 JSON Schema，模型返回工具名和参数；你的服务校验、鉴权、执行，再把结果塞回对话。生成参数 ≠ 已执行。</p>
+          <p><b>MCP：</b>标准化 tools / resources / prompts 的发现与调用，stdio 或 HTTP 传输。一个 MCP Server 可以被多个客户端复用。Function Calling 描述「这一轮怎么说」，MCP 描述「工具怎么连」。</p>
+          <p>必做：schema 校验、最小权限、超时限流、输出截断、审计。写文件、发消息、付款走审批。可运行实现见 <a class="chapter-link" href={`${import.meta.env.BASE_URL}agent/react-agent-loop`.replace(/\/+/g, '/')}>A01 · ReAct Agent 循环</a>。</p>
+        </RagQuestion>
+      </section>
+
+      <p class="source-note">题目来源：<a href="https://github.com/adongwanai/AgentGuide/blob/main/docs/04-interview/02-rag-questions.md" target="_blank" rel="noopener noreferrer">AgentGuide · RAG 系统篇 ↗</a>。理论概念见 <a class="chapter-link" href={`${import.meta.env.BASE_URL}agent/agent-theory`.replace(/\/+/g, '/')}>A02 · Agent 理论基础</a>。</p>
+    </main>
+  </div>
+</BaseLayout>
+
+<style>
+  .rag-flow, .fusion {
+    margin: 18px 0 24px; padding: 18px; border: 1px solid var(--line);
+    border-radius: 14px; background: var(--surface); box-shadow: var(--shadow-sm);
+  }
+  .rag-flow div { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin: 8px 0; }
+  .rag-flow b { width: 38px; font: 700 11px var(--font-mono); color: var(--accent); }
+  .rag-flow span, .fusion span {
+    padding: 8px 11px; border: 1px solid var(--line-strong); border-radius: 9px;
+    background: var(--paper); color: var(--ink); font-size: 13px; text-align: center;
+  }
+  .rag-flow i, .fusion b { color: var(--muted); font-style: normal; }
+  .fusion { display: flex; align-items: center; justify-content: center; gap: 11px; flex-wrap: wrap; }
+  .fusion small { color: var(--muted); font-size: 10px; }
+  .chapter-link, .source-note a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+  .source-note {
+    margin: 8px 0 50px; padding-top: 18px; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: 12.5px;
+  }
+</style>
