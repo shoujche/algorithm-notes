@@ -47,6 +47,14 @@ npm run preview  # 本地预览构建结果
 | [`lowest_common_ancestor.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/binary-tree/lowest_common_ancestor.py) | 最近公共祖先（LeetCode 236） |
 | [`is_complete_tree.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/binary-tree/is_complete_tree.py) | 完全性检验（LeetCode 958） |
 
+- 动态规划章节全部源码：[`src/code/dynamic-programming/`](https://github.com/shoujche/algorithm-notes/tree/main/src/code/dynamic-programming)
+
+| 文件 | 说明 |
+| --- | --- |
+| [`climb_stairs.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/dynamic-programming/climb_stairs.py) | 爬楼梯的方法数（LeetCode 70） |
+| [`min_cost_climbing_stairs.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/dynamic-programming/min_cost_climbing_stairs.py) | 使用最小花费爬楼梯（LeetCode 746） |
+| [`house_robber.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/dynamic-programming/house_robber.py) | 打家劫舍（LeetCode 198） |
+
 > 网页上每个代码块右上角的文件名都可点击，会直接跳到上面对应的 GitHub 源文件。
 
 - ReAct Agent 章节全部源码：[`src/code/agent/react-agent-loop/`](https://github.com/shoujche/algorithm-notes/tree/main/src/code/agent/react-agent-loop)

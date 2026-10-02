@@ -7,7 +7,7 @@ import Interview from '../../components/Interview.astro';
 import Complexity from '../../components/Complexity.astro';
 import CodeBlock from '../../components/CodeBlock.astro';
 import { chapters } from '../../data/topics';
-import { mutable, copyDemo, args, defaultArg, closure, duckTyping, CODE_DIR } from '../../data/py-basics-code';
+import { mutable, copyDemo, args, defaultArg, closure, duckTyping, classStaticMethod, CODE_DIR } from '../../data/py-basics-code';
 import { ghBlob } from '../../lib/github';
 
 const chapter = chapters.find((c) => c.slug === 'py-basics')!;
@@ -19,9 +19,9 @@ const chapter = chapters.find((c) => c.slug === 'py-basics')!;
       <div class="hero">
         <span class="eyebrow">Python & Agent / {chapter.num} · 语言基础</span>
         <h2>语言基础 <em>Language Basics</em>:<br />对象、引用与那些经典陷阱</h2>
-        <p>可变/不可变、is vs ==、深浅拷贝、参数传递、可变默认参数、闭包延迟绑定——这些是 Python 面试开场必问的基本功。共同的底层模型只有一句话:<b>Python 里一切皆对象,变量只是名字(引用)</b>。理解了这句,所有坑都能推导出来。</p>
+        <p>可变/不可变、is vs ==、深浅拷贝、参数传递、可变默认参数、闭包延迟绑定、鸭子类型、staticmethod 与 classmethod——这些是 Python 面试开场必问的基本功。共同的底层模型只有一句话:<b>Python 里一切皆对象,变量只是名字(引用)</b>。理解了这句,所有坑都能推导出来。</p>
         <div class="meta">
-          <div><span class="n">6</span><span class="l">Topics</span></div>
+          <div><span class="n">8</span><span class="l">Topics</span></div>
           <div><span class="n">引用</span><span class="l">核心</span></div>
           <div><span class="n">id()</span><span class="l">工具</span></div>
           <div><span class="n">面试</span><span class="l">高频</span></div>
@@ -160,6 +160,34 @@ const chapter = chapters.find((c) => c.slug === 'py-basics')!;
         ]} />
         <Interview q="鸭子类型和抽象基类(ABC)/接口是什么关系?什么时候该用哪个?">
           <p>鸭子类型是<b>隐式契约</b>(约定方法名,不强制),灵活但错误延后到运行时;<kbd>abc.ABC</kbd> 是<b>显式契约</b>(继承并实现抽象方法,否则实例化就报错),更安全但更死板。小范围、内部代码用鸭子类型即可;对外的框架/插件接口,或想让缺失实现"尽早爆炸",用 ABC 或 <kbd>Protocol</kbd>。<kbd>Protocol</kbd> 是折中:不用继承也能被类型检查器验证。</p>
+        </Interview>
+      </section>
+
+      <!-- 08 staticmethod 与 classmethod -->
+      <section class="article" id="class-static">
+        <div class="art-head"><span class="num">08</span><LcBadge kind="mid" text="多态 · Polymorphism" /></div>
+        <h3>staticmethod 与 classmethod</h3>
+        <p class="lead">普通方法第一个参数是实例 <kbd>self</kbd>;<kbd>@classmethod</kbd> 的第一个参数是类 <kbd>cls</kbd>;<kbd>@staticmethod</kbd> 什么都不收。区别不在「能不能通过类调用」,而在<b>方法能拿到谁</b>。</p>
+        <Idea>
+          <kbd>cls</kbd> 不是「定义这个方法的类」,而是<b>实际调用它的那个类</b>。子类继承父类的 classmethod,不用重写,调用时 <kbd>cls</kbd> 自动变成子类。
+          <ol class="steps">
+            <li><b>staticmethod</b>:放和类、实例状态都无关的工具函数,比如 <kbd>normalize(name)</kbd>。它只是借类的命名空间分组,没有多态。</li>
+            <li><b>classmethod 当工厂</b>:<kbd>return cls(...)</kbd>。<kbd>RedisStorage.create()</kbd> 返回 <kbd>RedisStorage</kbd>,<kbd>S3Storage.create()</kbd> 返回 <kbd>S3Storage</kbd>,父类一份代码服务所有子类。</li>
+            <li><b>classmethod 读类属性</b>:<kbd>cls.backend</kbd> 取到的是子类覆盖后的值,所以子类只改一个类属性就能改变行为。</li>
+            <li><b>可以 super()</b>:子类扩展父类的 classmethod 时,<kbd>super().create()</kbd> 里的 <kbd>cls</kbd> 仍然是子类。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={classStaticMethod} lang="python" file="class_static_method.py" src={ghBlob(`${CODE_DIR}/class_static_method.py`)} />
+        <Complexity items={[
+          { l: '实例方法', v: '收 self' },
+          { l: 'classmethod', v: '收 cls · 随调用者变' },
+          { l: 'staticmethod', v: '什么都不收' },
+        ]} />
+        <Interview q="工厂方法为什么要写成 classmethod,而不是 staticmethod?">
+          <p>staticmethod 拿不到 <kbd>cls</kbd>,只能把类名写死,比如 <kbd>return Storage(...)</kbd>。子类继承后调用,得到的仍是 <kbd>Storage</kbd>,多态就丢了,代码里的 <kbd>BrokenRedis.create()</kbd> 就是这个反例。classmethod 写 <kbd>return cls(...)</kbd>,谁调用就创建谁。标准库里的 <kbd>dict.fromkeys</kbd>、<kbd>datetime.fromtimestamp</kbd> 都是这么做的,所以 <kbd>OrderedDict.fromkeys()</kbd> 返回的是 <kbd>OrderedDict</kbd>。</p>
+        </Interview>
+        <Interview q="通过实例调用 classmethod,cls 是什么?staticmethod 什么时候值得用?">
+          <p>通过实例调用时,<kbd>cls</kbd> 是 <kbd>type(实例)</kbd>,也就是实例真正的类,不是变量声明时的父类。staticmethod 适合「逻辑上属于这个类,但不读写任何类或实例状态」的辅助函数。如果它其实和类无关,写成模块级函数通常更清楚。底层上,两者都是描述符:<kbd>classmethod.__get__</kbd> 把 <kbd>cls</kbd> 绑定为第一个参数,<kbd>staticmethod.__get__</kbd> 直接返回原函数。</p>
         </Interview>
       </section>
     </main>

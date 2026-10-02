@@ -1,0 +1,217 @@
+---
+// 一维 DP 表格步进。格子和文案都在构建时写进 DOM，脚本只改 class 与 textContent。
+export interface DpFrame {
+  step: string;
+  text: string;
+  values: string[];
+  active: number;
+  sources: number[];
+}
+
+interface Props {
+  id: string;
+  label: string;
+  cells: string[];
+  frames: DpFrame[];
+}
+
+const { id, label, cells, frames } = Astro.props;
+---
+<div
+  class="stage dp-stage"
+  id={id}
+  role="group"
+  tabindex="0"
+  aria-label={label}
+>
+  <div class="grid">
+    <ol class="dp-row">
+      {cells.map((name) => (
+        <li class="dp-cell">
+          <span class="dp-name">{name}</span>
+          <b class="dp-val">—</b>
+        </li>
+      ))}
+    </ol>
+  </div>
+  <div class="panel">
+    <div class="controls">
+      <button class="btn dp-reset" type="button">↺ 重置</button>
+      <button class="btn dp-prev" type="button">‹ 上一步</button>
+      <button class="btn primary dp-play" type="button" aria-describedby={`${id}-hint`}>▶ 播放</button>
+      <button class="btn dp-next" type="button">下一步 ›</button>
+    </div>
+    <div class="stepbar">
+      <div class="progress"><div class="fill dp-fill"></div></div>
+      <span class="count dp-count">1 / {frames.length}</span>
+    </div>
+    <p class="caption" aria-live="polite">
+      <span class="k dp-step"></span><span class="dp-text"></span>
+    </p>
+    <p class="dp-hint" id={`${id}-hint`} hidden>
+      系统已开启「减少动态效果」，自动播放保持关闭；用上一步 / 下一步或左右方向键逐步查看。
+    </p>
+  </div>
+</div>
+
+<script define:vars={{ animId: id, frames }}>
+  const stage = document.getElementById(animId);
+  if (stage) {
+    const cells = [...stage.querySelectorAll('.dp-cell')];
+    const values = cells.map((cell) => cell.querySelector('.dp-val'));
+    const stepNode = stage.querySelector('.dp-step');
+    const textNode = stage.querySelector('.dp-text');
+    const countNode = stage.querySelector('.dp-count');
+    const fillNode = stage.querySelector('.dp-fill');
+    const resetBtn = stage.querySelector('.dp-reset');
+    const prevBtn = stage.querySelector('.dp-prev');
+    const nextBtn = stage.querySelector('.dp-next');
+    const playBtn = stage.querySelector('.dp-play');
+    const hintNode = stage.querySelector('.dp-hint');
+    const last = frames.length - 1;
+    let idx = 0;
+    let timer = null;
+
+    function render() {
+      const frame = frames[idx];
+      cells.forEach((cell, i) => {
+        cell.classList.toggle('is-active', i === frame.active);
+        cell.classList.toggle('is-src', frame.sources.includes(i));
+        cell.classList.toggle('is-done', frame.values[i] !== '—' && i !== frame.active && !frame.sources.includes(i));
+        values[i].textContent = frame.values[i];
+      });
+      stepNode.textContent = frame.step;
+      textNode.textContent = frame.text;
+      countNode.textContent = `${idx + 1} / ${frames.length}`;
+      fillNode.style.width = `${(idx / last) * 100}%`;
+      prevBtn.disabled = idx === 0;
+      nextBtn.disabled = idx === last;
+    }
+
+    function go(next) {
+      idx = Math.max(0, Math.min(last, next));
+      render();
+    }
+
+    function stop() {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+      playBtn.textContent = '▶ 播放';
+    }
+
+    function play() {
+      if (timer !== null) {
+        stop();
+        return;
+      }
+      if (idx === last) go(0);
+      playBtn.textContent = '⏸ 暂停';
+      timer = window.setInterval(() => {
+        if (idx >= last) {
+          stop();
+          return;
+        }
+        go(idx + 1);
+      }, 1400);
+    }
+
+    resetBtn.addEventListener('click', () => {
+      stop();
+      go(0);
+    });
+    prevBtn.addEventListener('click', () => {
+      stop();
+      go(idx - 1);
+    });
+    nextBtn.addEventListener('click', () => {
+      stop();
+      go(idx + 1);
+    });
+    playBtn.addEventListener('click', play);
+
+    stage.addEventListener('keydown', (event) => {
+      const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+      if (!keys.includes(event.key)) return;
+      event.preventDefault();
+      stop();
+      if (event.key === 'ArrowLeft') go(idx - 1);
+      else if (event.key === 'ArrowRight') go(idx + 1);
+      else if (event.key === 'Home') go(0);
+      else go(last);
+    });
+
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+    function applyMotionPreference() {
+      if (reduced.matches) stop();
+      playBtn.disabled = reduced.matches;
+      hintNode.hidden = !reduced.matches;
+    }
+    reduced.addEventListener('change', applyMotionPreference);
+    applyMotionPreference();
+    render();
+  }
+</script>
+
+<style>
+  .dp-stage:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .dp-row {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+    gap: 10px;
+  }
+  .dp-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 72px;
+    padding: 10px 8px;
+    border-radius: 12px;
+    border: 1px solid var(--line-strong);
+    background: #fff;
+    text-align: center;
+  }
+  .dp-name {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .dp-val {
+    font-family: var(--font-mono);
+    font-size: 20px;
+    color: var(--ink);
+  }
+  .dp-cell.is-src {
+    border-color: #c5cef4;
+    background: #f0f2fc;
+  }
+  .dp-cell.is-src .dp-val {
+    color: var(--cobalt);
+  }
+  .dp-cell.is-active {
+    border-color: var(--orange);
+    background: #fdf3ee;
+  }
+  .dp-cell.is-active .dp-val {
+    color: var(--orange);
+  }
+  .dp-cell.is-done {
+    border-color: #bfe3d6;
+    background: #f1faf6;
+  }
+  .dp-cell.is-done .dp-val {
+    color: var(--teal);
+  }
+  .dp-hint {
+    margin: 10px 0 0;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+</style>

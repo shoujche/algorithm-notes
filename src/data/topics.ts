@@ -57,7 +57,20 @@ export const chapters: Chapter[] = [
       { id: 'completeness', num: '06', label: '完全性检验', lc: '958' },
     ],
   },
-  { slug: 'dynamic-programming', category: 'algo', num: '04', cn: '动态规划', en: 'Dynamic Programming', summary: '规划中。', ready: false },
+  {
+    slug: 'dynamic-programming',
+    category: 'algo',
+    num: '04',
+    cn: '动态规划',
+    en: 'Dynamic Programming',
+    summary: '从爬楼梯的方法数、最小花费，到打家劫舍：同一套「前两格决定当前格」的一维 DP。',
+    ready: true,
+    sections: [
+      { id: 'climb-stairs', num: '01', label: '爬楼梯', lc: '70' },
+      { id: 'min-cost', num: '02', label: '最小花费爬楼梯', lc: '746' },
+      { id: 'house-robber', num: '03', label: '打家劫舍', lc: '198' },
+    ],
+  },
 
   // ===== Python 板块 =====
   { slug: 'py-basics', category: 'python', num: 'P01', cn: '语言基础', en: 'Language Basics', summary: '可变/不可变、is vs ==、深浅拷贝、参数传递等 Python 基本功。', ready: true,
@@ -69,6 +82,7 @@ export const chapters: Chapter[] = [
       { id: 'default-arg', num: '05', label: '可变默认参数陷阱' },
       { id: 'closure', num: '06', label: '闭包与延迟绑定' },
       { id: 'duck-typing', num: '07', label: '鸭子类型' },
+      { id: 'class-static', num: '08', label: 'staticmethod 与 classmethod' },
     ],
   },
   { slug: 'data-model', category: 'python', num: 'P02', cn: '数据模型与高级特性', en: 'Data Model', summary: '魔术方法、装饰器、生成器/迭代器、上下文管理器、描述符。', ready: true,
