@@ -1,0 +1,285 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Interview from '../../components/Interview.astro';
+import { chapters } from '../../data/topics';
+import {
+  CODE_DIR,
+  approvalRoute,
+  breakpointCode,
+  commandFromNode,
+  commandParent,
+  interruptResume,
+  memoryStore,
+  messageThread,
+  minimalGraph,
+  multiInterrupt,
+  presetAgent,
+  replay,
+  runControls,
+  sendFanout,
+  timeTravel,
+  toolLoop,
+  updateState,
+} from '../../data/langgraph-code';
+import { ghBlob } from '../../lib/github';
+
+const chapter = chapters.find((item) => item.slug === 'langgraph')!;
+const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
+const a01 = `${import.meta.env.BASE_URL}agent/react-agent-loop`.replace(/\/+/g, '/');
+---
+<BaseLayout title="LangGraph 核心用法 · Agent · 算法、Python 与 Agent 学习手记" active="agent">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Agent / {chapter.num} · LangGraph</span>
+        <h2>一次运行，就是一张<em>可暂停</em>的图</h2>
+        <p>前六节把 <kbd>Command</kbd> 用对：节点里 <kbd>return</kbd> 用 <kbd>update</kbd>、<kbd>goto</kbd>、<kbd>graph</kbd>，<kbd>invoke()</kbd> 只用 <kbd>resume</kbd>，这个值会变成 <kbd>interrupt()</kbd> 的返回值。后面七节是落地时图还要扛住的事：断点、改状态、从旧检查点分叉、同一条线程的消息、工具循环、步数与重试、流式输出、<kbd>Send</kbd> 扇出，以及 Store 和检查点各记什么。生产级循环见 <a class="chapter-link" href={a01}>A01</a>。例子不调用真实模型，用 A01 环境里的 LangGraph 1.x 即可跑。</p>
+        <div class="meta">
+          <div><span class="n">13</span><span class="l">Topics</span></div>
+          <div><span class="n">thread</span><span class="l">短期记忆</span></div>
+          <div><span class="n">Store</span><span class="l">跨线程</span></div>
+          <div><span class="n">不调模型</span><span class="l">可本地跑</span></div>
+        </div>
+      </div>
+
+      <section class="article" id="graph">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="基础 · StateGraph" /></div>
+        <h3>最小状态图</h3>
+        <p class="lead">一张图是状态、节点和边。节点返回要合并的字段；条件边根据状态选择下一个节点。</p>
+        <Idea>
+          <ol class="steps">
+            <li>用 <kbd>TypedDict</kbd> 声明状态。节点返回的字典是局部更新，没有 reducer 时同名字段以后写为准。</li>
+            <li><kbd>add_edge</kbd> 是固定跳转，<kbd>add_conditional_edges</kbd> 用函数返回下一个节点名。</li>
+            <li><kbd>compile()</kbd> 之后才能 <kbd>invoke</kbd>。这一节还没有中断，所以不需要 checkpointer。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={minimalGraph} lang="python" file="minimal_graph.py" src={src('minimal_graph.py')} />
+        <p class="cue"><span class="t">记忆提示</span>条件边负责路由。下一节的 <kbd>Command(goto=...)</kbd> 做的是同一件事，只是写在节点的返回值里。</p>
+      </section>
+
+      <section class="article" id="command">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="mid" text="核心 · Command" /></div>
+        <h3>四个参数，两种场景</h3>
+        <p class="lead"><kbd>Command</kbd> 被刻意做成一专多能。先记住分界：<b>resume 只作为输入，另外三个只作为节点的返回值</b>。</p>
+        <table class="cmp">
+          <thead>
+            <tr><th>参数</th><th>用在哪</th><th>等价于</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><kbd>update</kbd></td><td>节点 <kbd>return</kbd></td><td>节点正常返回一个状态更新</td></tr>
+            <tr><td><kbd>goto</kbd></td><td>节点 <kbd>return</kbd></td><td>条件边做的那次路由</td></tr>
+            <tr><td><kbd>graph</kbd></td><td>节点 <kbd>return</kbd></td><td>默认当前图；<kbd>Command.PARENT</kbd> 发给父图</td></tr>
+            <tr><td><kbd>resume</kbd></td><td><kbd>invoke</kbd> / <kbd>stream</kbd> 的输入</td><td>恢复后，变成 <kbd>interrupt()</kbd> 的返回值</td></tr>
+          </tbody>
+        </table>
+        <h4 class="sub">从节点 return：update + goto</h4>
+        <p>报价仍然是普通节点。路由节点不再依赖条件边，直接返回跳转和状态更新。目的节点要先 <kbd>add_node</kbd>，否则 <kbd>goto</kbd> 无处可去。</p>
+        <CodeBlock code={commandFromNode} lang="python" file="command_from_node.py" src={src('command_from_node.py')} />
+        <h4 class="sub">graph：把命令发给父图</h4>
+        <p><kbd>graph</kbd> 省略时命令留在当前图。<kbd>Command.PARENT</kbd> 表示最近的父图：子图节点可以一边更新父状态，一边跳到父图里的节点。</p>
+        <CodeBlock code={commandParent} lang="python" file="command_parent.py" src={src('command_parent.py')} />
+        <p class="cue"><span class="t">记忆提示</span><kbd>update</kbd> / <kbd>goto</kbd> / <kbd>graph</kbd> 是节点的输出。<kbd>resume</kbd> 是下一次调用图时的输入。不要在同一次 <kbd>Command</kbd> 里把这两套混用。</p>
+        <Interview q="为什么不把 update 和 resume 放进同一次 invoke？">
+          <p>两套参数回答的是两个问题。<kbd>update</kbd>、<kbd>goto</kbd>、<kbd>graph</kbd> 问的是「这个节点跑完，状态和图往哪走」。<kbd>resume</kbd> 问的是「上次 <kbd>interrupt()</kbd> 还在等的那个值是什么」。恢复执行时，图要先把值交还给暂停点，再由节点自己决定要不要更新状态、要不要跳转。输入阶段就改状态或跳节点，会把「人还没答复」和「节点已经做完决定」叠在一起。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="interrupt">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="mid" text="核心 · interrupt" /></div>
+        <h3>resume 的值，就是 interrupt() 的返回值</h3>
+        <p class="lead">方向和「把 payload 传给节点让它执行」相反。<kbd>interrupt(payload)</kbd> 的 payload 从节点流向外部；<kbd>Command(resume=value)</kbd> 的 value 从外部流回，变成那一行 <kbd>interrupt()</kbd> 本身的返回值。</p>
+        <div class="lanes" aria-label="interrupt 与 resume 的方向">
+          <div class="lane">
+            <span class="dir">节点 → 外部</span>
+            <p><kbd>interrupt(payload)</kbd> 把 payload 挂到结果的 <kbd>__interrupt__</kbd> 上。这是给人看的内容，比如「要不要批准这次预订」。</p>
+          </div>
+          <div class="lane back">
+            <span class="dir">外部 → 节点</span>
+            <p>用同一个 <kbd>thread_id</kbd> 调用 <kbd>invoke(Command(resume=value))</kbd>。value 可以是字典、字符串、布尔值，或任何可序列化对象。节点里用变量接住即可。</p>
+          </div>
+        </div>
+        <Idea>
+          中断能恢复，靠的是检查点，不是 Python 调用栈。
+          <ol class="steps">
+            <li><kbd>compile(checkpointer=...)</kbd> 是前提。没有检查点，<kbd>Command(resume=...)</kbd> 会直接报错。</li>
+            <li><kbd>config</kbd> 里的 <kbd>thread_id</kbd> 必须和暂停时是同一个，图才知道回到哪一次执行。</li>
+            <li>第一次 <kbd>invoke</kbd> 的输入是初始状态。恢复时不要再传状态，只传 <kbd>Command(resume=...)</kbd>。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={interruptResume} lang="python" file="interrupt_resume.py" src={src('interrupt_resume.py')} />
+        <p>上面恢复时传入的整个字典，就是 <kbd>human_approval</kbd> 里 <kbd>decision</kbd> 最终拿到的值。酒店名不会被这个字典改写，除非节点自己把它写进 <kbd>update</kbd>。怎么按决定跳分支，见第 06 节。</p>
+        <p class="cue"><span class="t">记忆提示</span>发出去的是 <kbd>interrupt</kbd> 的参数，收回来的是 <kbd>interrupt</kbd> 的返回值。</p>
+      </section>
+
+      <section class="article" id="replay">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="hard" text="坑 · 重放" /></div>
+        <h3>恢复时，节点从头再跑一遍</h3>
+        <p class="lead">检查点保存的是图的状态，不是执行到第几行。恢复时框架重新调用这个节点函数，跑到 <kbd>interrupt()</kbd> 时直接返回你传入的值。</p>
+        <ol class="flow">
+          <li><span class="s">01</span><span>首次进入。副作用代码执行，然后 <kbd>interrupt()</kbd> 抛出中断，图暂停。</span></li>
+          <li><span class="s">02</span><span>外部带着同一个 <kbd>thread_id</kbd> 提交 <kbd>Command(resume="yes")</kbd>。</span></li>
+          <li><span class="s">03</span><span>节点函数再次从头执行。副作用代码又跑一遍，<kbd>interrupt()</kbd> 这次返回 <b>yes</b>，函数继续往下。</span></li>
+        </ol>
+        <CodeBlock code={replay} lang="python" file="replay.py" src={src('replay.py')} />
+        <p>所以 <kbd>interrupt()</kbd> 之前不要写数据库、发请求、扣款。那些逻辑要么挪到 <kbd>interrupt()</kbd> 之后，要么做成幂等。A01 的工具执行用 call_id 账本挡住第二次真正的副作用。</p>
+        <p class="cue"><span class="t">记忆提示</span>恢复 = 重放。重放安全，是因为暂停前没有副作用。</p>
+        <Interview q="能不能从 interrupt 那一行精确继续，而不是重跑整个节点？">
+          <p>不能。LangGraph 没有保存 Python 栈。它只保证：再次执行到同一个任务里的第 <i>i</i> 次 <kbd>interrupt()</kbd> 时，把已经提交的第 <i>i</i> 个 resume 值交回去。节点函数因此必须可重入。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="multi">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="hard" text="对应关系" /></div>
+        <h3>多次 interrupt，值怎么对上</h3>
+        <p class="lead">分两种挂起。同一个节点里接连调用，按出现顺序一次交一个值。多个任务同时挂起，必须用 interrupt id 指明每一个。</p>
+        <Idea>
+          <ol class="steps">
+            <li>同一节点里的第二次 <kbd>interrupt()</kbd> 要等第一次恢复之后才会执行到。每次 <kbd>Command(resume=单个值)</kbd> 只填下一次还空着的调用。</li>
+            <li>节点重跑时，框架按顺序把已经收到的值交还。这份列表只属于正在执行该节点的那个任务，不跨任务共享。</li>
+            <li>一次传入列表，列表会整个变成下一次 <kbd>interrupt()</kbd> 的返回值，不会按元素拆开。</li>
+            <li>两个节点并行挂起时，结果里有多个 pending interrupt。这时单个 resume 值会被拒绝，要传 <kbd>{'{interrupt_id: value}'}</kbd>。键是中断 id。普通业务字典（例如带 <kbd>type</kbd> 的审批结果）不会被当成这种映射。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={multiInterrupt} lang="python" file="multi_interrupt.py" src={src('multi_interrupt.py')} />
+        <p class="cue"><span class="t">记忆提示</span>一个任务里按顺序填；多个任务同时等，就按 id 填。列表不是「一次填完两次中断」的语法。</p>
+      </section>
+
+      <section class="article" id="route">
+        <div class="art-head"><span class="num">06</span><LcBadge kind="mid" text="组合 · goto" /></div>
+        <h3>审批之后，用 goto 跳分支</h3>
+        <p class="lead">人的决定先作为 <kbd>interrupt()</kbd> 的返回值回来，节点再用另一次 <kbd>Command</kbd> 做路由。这两次 <kbd>Command</kbd> 不是同一种用法。</p>
+        <ol class="flow">
+          <li><span class="s">01</span><span>外部输入：<kbd>graph.invoke(Command(resume="yes"), config)</kbd></span></li>
+          <li><span class="s">02</span><span>节点内部返回：<kbd>Command(goto="approved_path", update={'{"decision": "approved"}'})</kbd></span></li>
+        </ol>
+        <CodeBlock code={approvalRoute} lang="python" file="approval_route.py" src={src('approval_route.py')} />
+        <p class="cue"><span class="t">记忆提示</span>resume 把人的答复送进节点；goto 和 update 是节点看到答复之后自己做的决定。</p>
+        <Interview q="编辑过的参数应该在 resume 里改状态，还是在节点里改？">
+          <p>在节点里改。resume 只负责把人提交的结构交还给 <kbd>interrupt()</kbd>。节点核对这个结构之后，用 <kbd>return Command(update=...)</kbd> 写入新的酒店名、决定或别的字段。这样「人说了什么」和「图因此改了什么」仍然分属两次 Command。如果停的是断点，节点还没开始跑，改状态用第 08 节的 <kbd>update_state</kbd>。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="breakpoint">
+        <div class="art-head"><span class="num">07</span><LcBadge kind="mid" text="暂停 · 断点" /></div>
+        <h3>断点停在节点外面</h3>
+        <p class="lead"><kbd>interrupt_before</kbd> / <kbd>interrupt_after</kbd> 按节点名暂停，写在 <kbd>compile</kbd> 上，也可以某一次 <kbd>invoke</kbd> 临时加上。节点函数里不必调用 <kbd>interrupt()</kbd>。</p>
+        <Idea>
+          <ol class="steps">
+            <li>停在 <kbd>execute</kbd> 之前时，<kbd>get_state().next</kbd> 是 <kbd>("execute",)</kbd>。这次没有给人看的 payload，<kbd>interrupts</kbd> 是空的。</li>
+            <li>接着跑用 <kbd>graph.invoke(None, config)</kbd>，同一个 <kbd>thread_id</kbd>。这里没有 <kbd>interrupt()</kbd> 在等返回值，所以不用 <kbd>Command(resume=...)</kbd>。</li>
+            <li>工具审批可以拆成「提议」和「执行」两个节点，在执行节点上设断点。人点头之后直接 <kbd>invoke(None)</kbd>。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={breakpointCode} lang="python" file="breakpoint.py" src={src('breakpoint.py')} />
+        <p class="cue"><span class="t">记忆提示</span>断点看 <kbd>next</kbd>，用 <kbd>None</kbd> 继续。<kbd>interrupt()</kbd> 看 payload，用 <kbd>resume</kbd> 交回返回值。</p>
+      </section>
+
+      <section class="article" id="edit-state">
+        <div class="art-head"><span class="num">08</span><LcBadge kind="mid" text="暂停 · 改状态" /></div>
+        <h3>get_state 看现场，update_state 从外面改</h3>
+        <p class="lead">人要改酒店名时，不必把新值塞进 <kbd>resume</kbd>。<kbd>update_state</kbd> 从检查点外面写入，<kbd>as_node</kbd> 决定这次写入算哪个节点刚做完，从而决定接下来走哪条边。</p>
+        <CodeBlock code={updateState} lang="python" file="update_state.py" src={src('update_state.py')} />
+        <p class="cue"><span class="t">记忆提示</span>先改检查点，再 <kbd>invoke(None)</kbd>。执行节点读到的已经是改过的酒店名。</p>
+      </section>
+
+      <section class="article" id="fork">
+        <div class="art-head"><span class="num">09</span><LcBadge kind="hard" text="检查点 · 分叉" /></div>
+        <h3>从旧的一步另开一条历史</h3>
+        <p class="lead"><kbd>get_state_history</kbd> 是这条 <kbd>thread_id</kbd> 上的检查点列表，新的在前。选中「b 还没跑」的那一帧，改掉 path，再 <kbd>invoke(None)</kbd>，新分支成为线程的头。原来的终点还在，要用它自己的 config 才能读回来。</p>
+        <CodeBlock code={timeTravel} lang="python" file="time_travel.py" src={src('time_travel.py')} />
+        <p class="cue"><span class="t">记忆提示</span>不带 <kbd>checkpoint_id</kbd> 的 <kbd>get_state</kbd> 只看最新的头。旧步要用历史里那一帧的 config。</p>
+      </section>
+
+      <section class="article" id="thread">
+        <div class="art-head"><span class="num">10</span><LcBadge kind="base" text="记忆 · 线程" /></div>
+        <h3>同一个 thread_id，就是接着聊</h3>
+        <p class="lead"><kbd>MessagesState</kbd> 的 <kbd>messages</kbd> 用 <kbd>add_messages</kbd> 做 reducer：每次只返回新消息，检查点里是叠起来的整段对话。换一个 <kbd>thread_id</kbd> 就是另一段，互相看不见。</p>
+        <CodeBlock code={messageThread} lang="python" file="message_thread.py" src={src('message_thread.py')} />
+        <p class="cue"><span class="t">记忆提示</span>检查点是短期记忆，钥匙是 <kbd>thread_id</kbd>。<kbd>InMemorySaver</kbd> 只活在当前进程；要跨进程就换成数据库 saver。</p>
+      </section>
+
+      <section class="article" id="tools">
+        <div class="art-head"><span class="num">11</span><LcBadge kind="mid" text="循环 · 工具" /></div>
+        <h3>模型节点、ToolNode、一条条件边</h3>
+        <p class="lead">落地时的 ReAct 环就是这三个零件。<kbd>tools_condition</kbd> 看最后一条消息有没有 tool call：有就去 <kbd>tools</kbd>，没有就结束。<kbd>ToolNode(..., handle_tool_errors=True)</kbd> 把工具异常收成一条 <kbd>status="error"</kbd> 的 ToolMessage，模型还能再答一句，图不会整段崩掉。</p>
+        <CodeBlock code={toolLoop} lang="python" file="tool_loop.py" src={src('tool_loop.py')} />
+        <h4 class="sub">预置图 · create_agent</h4>
+        <p>LangChain 1.x 的 <kbd>create_agent</kbd> 编出来的仍是这张图，节点名是 <kbd>model</kbd> 和 <kbd>tools</kbd>。它就是以前的 <kbd>langgraph.prebuilt.create_react_agent</kbd>。A01 在这张预置图上加了审批和账本；这里只用一个脚本模型把环跑通。</p>
+        <CodeBlock code={presetAgent} lang="python" file="preset_agent.py" src={src('preset_agent.py')} />
+        <p class="cue"><span class="t">记忆提示</span>工具失败先变成消息。节点自己抛出的异常才轮到下一节的重试。</p>
+      </section>
+
+      <section class="article" id="controls">
+        <div class="art-head"><span class="num">12</span><LcBadge kind="hard" text="运行 · 边界" /></div>
+        <h3>步数、重试、落盘、流式</h3>
+        <p class="lead">这四件事决定一次运行会不会跑飞、失败后怎么办、进程中途挂了丢掉多少、用户什么时候看到进度。</p>
+        <Idea>
+          <ol class="steps">
+            <li><kbd>recursion_limit</kbd> 放在 config 里。步数用尽抛 <kbd>GraphRecursionError</kbd>，自循环到不了你写的结束条件。</li>
+            <li><kbd>RetryPolicy</kbd> 挂在节点上。默认不重试 <kbd>RuntimeError</kbd>、<kbd>ValueError</kbd> 这类编程错误。临时故障用你自己的异常类型，或显式传入 <kbd>retry_on</kbd>。</li>
+            <li><kbd>durability="exit"</kbd> 这次运行结束时写一次检查点。<kbd>"sync"</kbd> 每个 superstep 都写完再走下一步。<kbd>"async"</kbd> 表示下一步不必等落盘；<kbd>InMemorySaver</kbd> 的 <kbd>put</kbd> 本身立刻返回，所以次数和 sync 一样。真正异步的数据库才可能在进程中途退出后少几步。</li>
+            <li><kbd>stream_mode</kbd> 里 <kbd>updates</kbd> 是每个节点的增量，<kbd>custom</kbd> 是节点里 <kbd>get_stream_writer()</kbd> 推出去的进度。产品上的「正在调用工具」来自这些流。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={runControls} lang="python" file="run_controls.py" src={src('run_controls.py')} />
+        <p class="cue"><span class="t">记忆提示</span>工具错误留在消息里；节点崩溃才重试。步数上限和检查点落盘是另外两道闸。</p>
+      </section>
+
+      <section class="article" id="fanout">
+        <div class="art-head"><span class="num">13</span><LcBadge kind="mid" text="并行 · 长期记忆" /></div>
+        <h3>Send 扇出，Store 跨线程</h3>
+        <p class="lead">多份输入同时处理，用条件边返回一组 <kbd>Send</kbd>。每个 worker 只拿到自己的那一项，结果靠 reducer 叠回父状态。这就是并行研究员、批量报价的骨架，没有单独的多 Agent 运行时。</p>
+        <CodeBlock code={sendFanout} lang="python" file="send_fanout.py" src={src('send_fanout.py')} />
+        <h4 class="sub">Store 与检查点</h4>
+        <p>检查点的钥匙是 <kbd>thread_id</kbd>，换一条线程就看不到上一段对话。<kbd>InMemoryStore</kbd> 的钥匙是命名空间，比如 <kbd>("user", "ada")</kbd>。两条线程共用同一个 store 时，后一条可以读到前一条记下的偏好，自己的检查点里却没有那段对话。</p>
+        <CodeBlock code={memoryStore} lang="python" file="memory_store.py" src={src('memory_store.py')} />
+        <p class="cue"><span class="t">记忆提示</span>这一次对话在检查点里。换线程还要用的资料在 Store 里。</p>
+        <Interview q="用户偏好应该写进检查点，还是写进 Store？">
+          <p>换一条 <kbd>thread_id</kbd> 还要在，就写 Store。只属于这一段对话的消息、报价和审批结果，留在检查点。权限、数据库连接、这次请求的预算不要进这两处，它们跟着重放会漂，放在图外面的 context 或调用方自己的对象里。A01 的副作用账本就是这样放的。</p>
+        </Interview>
+      </section>
+    </main>
+  </div>
+</BaseLayout>
+
+<style>
+  .chapter-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+
+  ol.flow { list-style: none; margin: 10px 0 0; padding: 0; }
+  ol.flow li { display: flex; gap: 12px; align-items: baseline; padding: 7px 0;
+    border-bottom: 1px solid var(--line); font-size: 14.5px; color: var(--graphite); }
+  ol.flow li:last-child { border-bottom: none; }
+  ol.flow .s { flex: none; font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    color: var(--accent); min-width: 22px; }
+  ol.flow b { color: var(--ink); }
+
+  p.cue { margin: 18px 0 0; padding-left: 13px; border-left: 2px solid var(--teal);
+    font-size: 14.5px; color: var(--graphite); }
+  p.cue .t { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.4px;
+    color: var(--teal); margin-right: 8px; }
+
+  table.cmp { width: 100%; border-collapse: collapse; margin: 14px 0 4px; font-size: 14px;
+    display: block; overflow-x: auto; }
+  table.cmp th, table.cmp td { text-align: left; padding: 9px 12px;
+    border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.cmp th { font-family: var(--font-mono); font-size: 10.5px; font-weight: 600;
+    letter-spacing: 0.4px; color: var(--muted); white-space: nowrap; }
+  table.cmp td { color: var(--graphite); }
+  table.cmp td:first-child { color: var(--ink); white-space: nowrap; }
+  table.cmp tbody tr:last-child td { border-bottom: none; }
+
+  .lanes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0; }
+  .lane { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 14px 16px; }
+  .lane.back { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+  .lane .dir { display: block; font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.4px; color: var(--accent); margin-bottom: 6px; }
+  .lane p { margin: 0; font-size: 14.5px; color: var(--graphite); }
+  @media (max-width: 720px) {
+    .lanes { grid-template-columns: 1fr; }
+  }
+</style>

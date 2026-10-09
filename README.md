@@ -51,9 +51,14 @@ npm run preview  # 本地预览构建结果
 
 | 文件 | 说明 |
 | --- | --- |
-| [`climb_stairs.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/dynamic-programming/climb_stairs.py) | 爬楼梯的方法数（LeetCode 70） |
-| [`min_cost_climbing_stairs.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/dynamic-programming/min_cost_climbing_stairs.py) | 使用最小花费爬楼梯（LeetCode 746） |
+| [`climb_stairs.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/dynamic-programming/climb_stairs.py) | 爬楼梯（LeetCode 70）：先填完整 dp 表，再给只留前两格的写法 |
+| [`min_cost_climbing_stairs.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/dynamic-programming/min_cost_climbing_stairs.py) | 最小花费爬楼梯（LeetCode 746） |
+| [`max_sub_array.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/dynamic-programming/max_sub_array.py) | 最大子数组和（LeetCode 53） |
 | [`house_robber.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/dynamic-programming/house_robber.py) | 打家劫舍（LeetCode 198） |
+| [`coin_change.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/dynamic-programming/coin_change.py) | 零钱兑换（LeetCode 322） |
+| [`length_of_lis.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/dynamic-programming/length_of_lis.py) | 最长递增子序列（LeetCode 300），O(n²) 的表 |
+| [`longest_common_subsequence.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/dynamic-programming/longest_common_subsequence.py) | 最长公共子序列（LeetCode 1143） |
+| [`min_distance.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/dynamic-programming/min_distance.py) | 编辑距离（LeetCode 72） |
 
 > 网页上每个代码块右上角的文件名都可点击，会直接跳到上面对应的 GitHub 源文件。
 
@@ -109,6 +114,27 @@ npm run preview  # 本地预览构建结果
 | [`chunking.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-hands-on/chunking.py) | 固定窗口、重叠窗口、按段落/句子边界切块 |
 
 Agent 核心真题（A04）是问答页，没有单独源码文件。
+
+- LangGraph 核心用法章节源码：[`src/code/agent/langgraph/`](https://github.com/shoujche/algorithm-notes/tree/main/src/code/agent/langgraph)
+
+| 文件 | 说明 |
+| --- | --- |
+| [`minimal_graph.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/langgraph/minimal_graph.py) | 最小状态图：状态、节点、条件边、invoke |
+| [`command_from_node.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/langgraph/command_from_node.py) | 节点 return `Command(update=..., goto=...)` |
+| [`command_parent.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/langgraph/command_parent.py) | `graph=Command.PARENT`：子图把命令发给父图 |
+| [`interrupt_resume.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/langgraph/interrupt_resume.py) | `interrupt` 的 payload 送出，`Command(resume=)` 作为它的返回值 |
+| [`replay.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/langgraph/replay.py) | 恢复时节点从头重跑 |
+| [`multi_interrupt.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/langgraph/multi_interrupt.py) | 同一节点按顺序恢复；并行挂起用 interrupt id |
+| [`approval_route.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/langgraph/approval_route.py) | 审批后用 `goto` 跳分支 |
+| [`breakpoint.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/langgraph/breakpoint.py) | `interrupt_before`，用 `invoke(None)` 继续 |
+| [`update_state.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/langgraph/update_state.py) | `get_state` / `update_state` |
+| [`time_travel.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/langgraph/time_travel.py) | 从旧检查点分叉 |
+| [`message_thread.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/langgraph/message_thread.py) | `MessagesState` + 同一个 `thread_id` |
+| [`tool_loop.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/langgraph/tool_loop.py) | 模型节点、`ToolNode`、`tools_condition` |
+| [`preset_agent.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/langgraph/preset_agent.py) | `create_agent` 编出的 LangGraph 图 |
+| [`run_controls.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/langgraph/run_controls.py) | 步数上限、重试、落盘与流式 |
+| [`send_fanout.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/langgraph/send_fanout.py) | `Send` 扇出 |
+| [`memory_store.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/langgraph/memory_store.py) | 检查点按线程，Store 跨线程 |
 
 ## 新增章节
 

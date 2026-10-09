@@ -10,12 +10,18 @@ import { chapters } from '../../data/topics';
 import {
   climbStairsCode,
   minCostCode,
+  maxSubArrayCode,
   houseRobberCode,
+  coinChangeCode,
+  lisCode,
+  lcsCode,
+  minDistanceCode,
   CODE_DIR,
 } from '../../data/dynamic-programming-code';
 import { ghBlob } from '../../lib/github';
 
 const chapter = chapters.find((c) => c.slug === 'dynamic-programming')!;
+const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
 ---
 <BaseLayout title="动态规划 Dynamic Programming · 算法与 Python 面试手记" active="algo">
   <div class="layout">
@@ -23,12 +29,12 @@ const chapter = chapters.find((c) => c.slug === 'dynamic-programming')!;
     <main>
       <div class="hero">
         <span class="eyebrow">算法与 Python 面试手记 / 第 {chapter.num} 章 · 动态规划 Dynamic Programming</span>
-        <h2>一维 DP：当前格<br />只看<em>前两格</em></h2>
-        <p>这三道题是同一张表格的三种问法。爬楼梯问「有几种走法」，最小花费问「哪条路最便宜」，打家劫舍问「相邻不能同时选时最多拿多少」。格子从左往右填，填完最后一格就是答案。</p>
+        <h2>先把<em>整张表</em>填出来</h2>
+        <p>每题都先开完整的 <kbd>dp</kbd> 数组，看清这一格从哪些旧格子来。一维题在同一文件后半再给只留前两格的写法。顺序从 Easy 往上：爬楼梯、最小花费、最大子数组和，然后打家劫舍、零钱兑换、最长递增子序列，最后两张二维表。</p>
         <div class="meta">
-          <div><span class="n">03</span><span class="l">Topics</span></div>
-          <div><span class="n">3</span><span class="l">LeetCode</span></div>
-          <div><span class="n">O(1)</span><span class="l">Extra Space</span></div>
+          <div><span class="n">08</span><span class="l">Topics</span></div>
+          <div><span class="n">8</span><span class="l">LeetCode</span></div>
+          <div><span class="n">整张表</span><span class="l">先看递推</span></div>
           <div><span class="n">动画</span><span class="l">Interactive</span></div>
         </div>
       </div>
@@ -41,9 +47,9 @@ const chapter = chapters.find((c) => c.slug === 'dynamic-programming')!;
         <Idea>
           最后一步只有两种：从第 <kbd>i-1</kbd> 阶再爬 1，或从第 <kbd>i-2</kbd> 阶再爬 2。两种互不重叠，所以方法数相加。
           <ol class="steps">
-            <li>第 1 阶只有「1」，方法数是 1；第 2 阶有「1+1」和「2」，方法数是 2</li>
+            <li>第 1 阶只有「1」，<kbd>dp[1] = 1</kbd>；第 2 阶有「1+1」和「2」，<kbd>dp[2] = 2</kbd></li>
             <li><kbd>dp[i] = dp[i-1] + dp[i-2]</kbd></li>
-            <li>这就是斐波那契。代码只留前两格，不必开长度为 n 的数组</li>
+            <li>先把长度为 <kbd>n+1</kbd> 的表填满。看懂之后，文件里的第二个函数只留前两格</li>
           </ol>
         </Idea>
         <DpTableAnim
@@ -54,13 +60,13 @@ const chapter = chapters.find((c) => c.slug === 'dynamic-programming')!;
             { step: '起步', text: '第 1 阶只能一步一步爬，1 种。第 2 阶可以 1+1 或直接 2，2 种。后面三格还没算。', values: ['1', '2', '—', '—', '—'], active: 1, sources: [0] },
             { step: '第3阶', text: '最后一步从第 2 阶爬 1，或从第 1 阶爬 2。2 + 1 = 3。', values: ['1', '2', '3', '—', '—'], active: 2, sources: [0, 1] },
             { step: '第4阶', text: '同样只看前两格：3 + 2 = 5。', values: ['1', '2', '3', '5', '—'], active: 3, sources: [1, 2] },
-            { step: '第5阶', text: '5 + 3 = 8。爬到第 5 阶有 8 种方法，也就是 climbStairs(5)。', values: ['1', '2', '3', '5', '8'], active: 4, sources: [2, 3] },
+            { step: '第5阶', text: '5 + 3 = 8。爬到第 5 阶有 8 种方法，也就是 climb_stairs(5)。', values: ['1', '2', '3', '5', '8'], active: 4, sources: [2, 3] },
           ]}
         />
-        <CodeBlock code={climbStairsCode} lang="python" file="climb_stairs.py" src={ghBlob(`${CODE_DIR}/climb_stairs.py`)} />
+        <CodeBlock code={climbStairsCode} lang="python" file="climb_stairs.py" src={src('climb_stairs.py')} />
         <Complexity items={[
           { l: '时间', v: 'O(n)' },
-          { l: '空间', v: 'O(1)' },
+          { l: '空间', v: 'O(n) 表 / O(1) 滚动' },
           { l: '递推', v: 'dp[i-1]+dp[i-2]' },
         ]} />
       </section>
@@ -71,11 +77,11 @@ const chapter = chapters.find((c) => c.slug === 'dynamic-programming')!;
         <p class="lead">数组 <kbd>cost[i]</kbd> 是从第 i 阶向上爬时要付的钱，付完之后可以再爬 1 阶或 2 阶。可以从下标 0 或 1 开始，求到达楼顶的最小花费。</p>
         <h4 class="sub">解题思路 · 到达这一格的更便宜来路</h4>
         <Idea>
-          楼顶在数组外面，下标是 <kbd>len(cost)</kbd>。站上下标 0 或 1 时还没付钱，所以这两个起点的花费都是 0。
+          楼顶在数组外面，下标是 <kbd>len(cost)</kbd>。站上下标 0 或 1 时还没付钱，所以 <kbd>dp[0]</kbd> 和 <kbd>dp[1]</kbd> 都是 0。
           <ol class="steps">
             <li>要到达下标 i，上一步要么在 i-1（再付 cost[i-1]），要么在 i-2（再付 cost[i-2]）</li>
             <li><kbd>dp[i] = min(dp[i-1] + cost[i-1], dp[i-2] + cost[i-2])</kbd></li>
-            <li>例子 <kbd>[10, 15, 20]</kbd>：到达楼顶是 min(10+20, 0+15) = 15。走的是「从第 1 阶直接跨两阶」</li>
+            <li>例子 <kbd>[10, 15, 20]</kbd>：到达楼顶是 min(10+20, 0+15) = 15</li>
           </ol>
         </Idea>
         <DpTableAnim
@@ -88,26 +94,60 @@ const chapter = chapters.find((c) => c.slug === 'dynamic-programming')!;
             { step: '楼顶', text: '从第 2 阶付 20，或从第 1 阶付 15。min(10+20, 0+15) = 15。答案是 15。', values: ['0', '0', '10', '15'], active: 3, sources: [1, 2] },
           ]}
         />
-        <CodeBlock code={minCostCode} lang="python" file="min_cost_climbing_stairs.py" src={ghBlob(`${CODE_DIR}/min_cost_climbing_stairs.py`)} />
+        <CodeBlock code={minCostCode} lang="python" file="min_cost_climbing_stairs.py" src={src('min_cost_climbing_stairs.py')} />
         <Complexity items={[
           { l: '时间', v: 'O(n)' },
-          { l: '空间', v: 'O(1)' },
+          { l: '空间', v: 'O(n) 表 / O(1) 滚动' },
           { l: '递推', v: '取前两格的 min' },
         ]} />
       </section>
 
+      <section class="article" id="max-subarray">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="easy" text="LeetCode 53 · Easy" /></div>
+        <h3>最大子数组和 Maximum Subarray</h3>
+        <p class="lead">连续子数组的和最大是多少。这题仍是 Easy，所以放在打家劫舍前面。和前两题不同：答案不一定在最后一格，而在整张表的最大值。</p>
+        <h4 class="sub">解题思路 · 以 i 结尾</h4>
+        <Idea>
+          <kbd>dp[i]</kbd> 只表示「必须用到 <kbd>nums[i]</kbd>」的最大和。要么新开一段，只要 <kbd>nums[i]</kbd>；要么接上以 <kbd>i-1</kbd> 结尾的那段。
+          <ol class="steps">
+            <li><kbd>dp[i] = max(nums[i], dp[i-1] + nums[i])</kbd></li>
+            <li>全局答案是 <kbd>max(dp)</kbd>，因为最优子数组会在某个位置结束</li>
+            <li>例子 <kbd>[-2, 1, -3, 4, -1, 2, 1, -5, 4]</kbd> 的答案是 6，对应 <kbd>[4, -1, 2, 1]</kbd></li>
+          </ol>
+        </Idea>
+        <DpTableAnim
+          id="dp-maxsum"
+          label="最大子数组和，格子里是以该位置结尾的最大和"
+          cells={['-2', '1', '-3', '4', '-1', '2', '1', '-5', '4']}
+          frames={[
+            { step: '起点', text: '只有 -2，以它结尾的和就是 -2。', values: ['-2', '—', '—', '—', '—', '—', '—', '—', '—'], active: 0, sources: [] },
+            { step: '接到 1', text: '1 单独拿是 1，接上 -2 变成 -1。取 1，相当于把前面丢掉。', values: ['-2', '1', '—', '—', '—', '—', '—', '—', '—'], active: 1, sources: [0] },
+            { step: '接到 -3', text: '-3 接上 1 是 -2，单独是 -3。取 -2。', values: ['-2', '1', '-2', '—', '—', '—', '—', '—', '—'], active: 2, sources: [1] },
+            { step: '从 4 重开', text: '4 比 -2+4 更大，新开一段。目前全局最大变成 4。', values: ['-2', '1', '-2', '4', '—', '—', '—', '—', '—'], active: 3, sources: [2] },
+            { step: '一直接到 1', text: '4 + -1 + 2 + 1 = 6。这一格是整张表的最大值，答案就是 6。', values: ['-2', '1', '-2', '4', '3', '5', '6', '—', '—'], active: 6, sources: [5] },
+            { step: '后面更小', text: '-5 接上 6 只剩 1，最后的 4 接上 1 是 5。都没有超过 6。', values: ['-2', '1', '-2', '4', '3', '5', '6', '1', '5'], active: 8, sources: [7] },
+          ]}
+        />
+        <CodeBlock code={maxSubArrayCode} lang="python" file="max_sub_array.py" src={src('max_sub_array.py')} />
+        <Complexity items={[
+          { l: '时间', v: 'O(n)' },
+          { l: '空间', v: 'O(n) 表 / O(1) 滚动' },
+          { l: '递推', v: '接上或重开' },
+        ]} />
+      </section>
+
       <section class="article" id="house-robber">
-        <div class="art-head"><span class="num">03</span><LcBadge kind="mid" text="LeetCode 198 · Medium" /></div>
+        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="LeetCode 198 · Medium" /></div>
         <h3>打家劫舍 House Robber</h3>
-        <p class="lead">一排房屋，每间有一定现金。相邻两间不能在同一晚偷，否则会触发警报。求一夜最多能偷到多少。</p>
+        <p class="lead">一排房屋，每间有一定现金。相邻两间不能在同一晚偷。求一夜最多能偷到多少。</p>
         <h4 class="sub">解题思路 · 偷，或者跳过</h4>
         <Idea>
-          走到第 i 间时只有两个合法选择，取更大的那个。
+          <kbd>dp[i]</kbd> 是考虑前 i 间房（下标 0 到 i-1）时的最大金额。<kbd>dp[0] = 0</kbd>。
           <ol class="steps">
-            <li>不偷这间：金额等于「前 i-1 间的最优」</li>
-            <li>偷这间：这间的钱，加上「前 i-2 间的最优」。中间那间必须空出来</li>
-            <li><kbd>dp[i] = max(dp[i-1], dp[i-2] + nums[i-1])</kbd></li>
-            <li>例子 <kbd>[2, 7, 9, 3, 1]</kbd>：最优是 2 + 9 + 1 = 12，第 2、4 间跳过</li>
+            <li>不偷第 i 间：<kbd>dp[i-1]</kbd></li>
+            <li>偷第 i 间：<kbd>nums[i-1] + dp[i-2]</kbd>，中间那间必须空出来</li>
+            <li><kbd>dp[i] = max(跳过, 偷)</kbd>。答案在 <kbd>dp[n]</kbd></li>
+            <li>例子 <kbd>[2, 7, 9, 3, 1]</kbd>：最优是 2 + 9 + 1 = 12</li>
           </ol>
         </Idea>
         <DpTableAnim
@@ -122,13 +162,182 @@ const chapter = chapters.find((c) => c.slug === 'dynamic-programming')!;
             { step: '第5间', text: '偷 1 接第 3 间的 11，得到 12；不偷仍是 11。答案是 12。', values: ['2', '7', '11', '11', '12'], active: 4, sources: [2, 3] },
           ]}
         />
-        <CodeBlock code={houseRobberCode} lang="python" file="house_robber.py" src={ghBlob(`${CODE_DIR}/house_robber.py`)} />
+        <CodeBlock code={houseRobberCode} lang="python" file="house_robber.py" src={src('house_robber.py')} />
         <Complexity items={[
           { l: '时间', v: 'O(n)' },
-          { l: '空间', v: 'O(1)' },
+          { l: '空间', v: 'O(n) 表 / O(1) 滚动' },
           { l: '递推', v: '偷或跳过的 max' },
+        ]} />
+      </section>
+
+      <section class="article" id="coin-change">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="mid" text="LeetCode 322 · Medium" /></div>
+        <h3>零钱兑换 Coin Change</h3>
+        <p class="lead">给定硬币面额，凑出金额 <kbd>amount</kbd> 的最少硬币数。凑不出返回 -1。每种面额可以重复用。</p>
+        <h4 class="sub">解题思路 · 金额 x 的最后一枚硬币</h4>
+        <Idea>
+          <kbd>dp[x]</kbd> 是凑出 x 的最少枚数。<kbd>dp[0] = 0</kbd>。其余先记成「不可能」，用 <kbd>amount + 1</kbd> 当哨兵。
+          <ol class="steps">
+            <li>枚举最后一枚硬币 <kbd>c</kbd>：如果 <kbd>c &lt;= x</kbd>，就可以从 <kbd>dp[x-c]</kbd> 再加 1 枚过来</li>
+            <li><kbd>dp[x] = min(dp[x], dp[x-c] + 1)</kbd></li>
+            <li>硬币 <kbd>[1, 2, 5]</kbd>、金额 11：5+5+1，答案是 3</li>
+          </ol>
+        </Idea>
+        <DpTableAnim
+          id="dp-coin"
+          label="硬币 1、2、5 凑出 0 到 5 的最少枚数"
+          cells={['0', '1', '2', '3', '4', '5']}
+          frames={[
+            { step: '金额 0', text: '凑出 0 不需要硬币，dp[0] = 0。后面先空着。', values: ['0', '—', '—', '—', '—', '—'], active: 0, sources: [] },
+            { step: '金额 1', text: '只能用 1。dp[0] + 1 = 1。', values: ['0', '1', '—', '—', '—', '—'], active: 1, sources: [0] },
+            { step: '金额 2', text: '用 1：dp[1]+1=2。用 2：dp[0]+1=1。取 1。', values: ['0', '1', '1', '—', '—', '—'], active: 2, sources: [0, 1] },
+            { step: '金额 3、4', text: '3 是 2+1，两枚。4 是两枚 2。', values: ['0', '1', '1', '2', '2', '—'], active: 4, sources: [2, 3] },
+            { step: '金额 5', text: '直接一枚 5：dp[0]+1=1，比 2+2+1 更少。凑 11 时同理，5+5+1 共 3 枚。', values: ['0', '1', '1', '2', '2', '1'], active: 5, sources: [0] },
+          ]}
+        />
+        <CodeBlock code={coinChangeCode} lang="python" file="coin_change.py" src={src('coin_change.py')} />
+        <Complexity items={[
+          { l: '时间', v: 'O(金额 × 硬币种数)' },
+          { l: '空间', v: 'O(金额)' },
+          { l: '递推', v: '最后一枚硬币' },
+        ]} />
+      </section>
+
+      <section class="article" id="lis">
+        <div class="art-head"><span class="num">06</span><LcBadge kind="mid" text="LeetCode 300 · Medium" /></div>
+        <h3>最长递增子序列 Longest Increasing Subsequence</h3>
+        <p class="lead">从左到右选若干个数，保持严格递增，最长能有多长。这里只写 <kbd>O(n²)</kbd> 的表，方便看「以谁结尾」。</p>
+        <h4 class="sub">解题思路 · 以 nums[i] 结尾</h4>
+        <Idea>
+          <kbd>dp[i]</kbd> 至少是 1，就是 <kbd>nums[i]</kbd> 自己。再看它左边每一个更小的 <kbd>nums[j]</kbd>，尝试把 <kbd>i</kbd> 接到那条子序列后面。
+          <ol class="steps">
+            <li><kbd>nums[j] &lt; nums[i]</kbd> 时，<kbd>dp[i] = max(dp[i], dp[j] + 1)</kbd></li>
+            <li>答案是 <kbd>max(dp)</kbd>，最长的那条不一定以最后一个数结尾</li>
+            <li><kbd>[10, 9, 2, 5, 3, 7, 101, 18]</kbd> 的一条最长是 2, 3, 7, 101，长度 4</li>
+          </ol>
+        </Idea>
+        <DpTableAnim
+          id="dp-lis"
+          label="以每个数结尾的最长递增子序列长度"
+          cells={['10', '9', '2', '5', '3', '7', '101', '18']}
+          frames={[
+            { step: '各自为 1', text: '10、9、2 都比左边小或没有更小的左边，长度都是 1。', values: ['1', '1', '1', '—', '—', '—', '—', '—'], active: 2, sources: [] },
+            { step: '5 接到 2', text: '5 大于 2，dp[3] = 1 + 1 = 2。3 同样能接到 2，也是 2。', values: ['1', '1', '1', '2', '2', '—', '—', '—'], active: 4, sources: [2] },
+            { step: '7 接到 3', text: '7 可以接 2、5 或 3。最长是 2 + 1 = 3。', values: ['1', '1', '1', '2', '2', '3', '—', '—'], active: 5, sources: [2, 3, 4] },
+            { step: '101 与 18', text: '101 接到 7 后面变成 4。18 也能接到 7 后面，也是 4。答案取最大值 4。', values: ['1', '1', '1', '2', '2', '3', '4', '4'], active: 7, sources: [5] },
+          ]}
+        />
+        <CodeBlock code={lisCode} lang="python" file="length_of_lis.py" src={src('length_of_lis.py')} />
+        <Complexity items={[
+          { l: '时间', v: 'O(n²)' },
+          { l: '空间', v: 'O(n)' },
+          { l: '递推', v: '接到某个更小的 j 后面' },
+        ]} />
+      </section>
+
+      <section class="article" id="lcs">
+        <div class="art-head"><span class="num">07</span><LcBadge kind="mid" text="LeetCode 1143 · Medium" /></div>
+        <h3>最长公共子序列 Longest Common Subsequence</h3>
+        <p class="lead">两个字符串里都出现、且相对顺序不变的最长子序列。子序列不必连续。<kbd>abcde</kbd> 和 <kbd>ace</kbd> 的答案是 <kbd>ace</kbd>，长度 3。</p>
+        <h4 class="sub">解题思路 · 前 i 个对前 j 个</h4>
+        <Idea>
+          <kbd>dp[i][j]</kbd> 是 <kbd>text1</kbd> 的前 i 个字符和 <kbd>text2</kbd> 的前 j 个字符的 LCS 长度。第 0 行、第 0 列都是空串，长度 0。
+          <ol class="steps">
+            <li>末尾字符相同：这个字符一定能用上，<kbd>dp[i][j] = dp[i-1][j-1] + 1</kbd></li>
+            <li>不相同：丢掉 text1 的末尾，或丢掉 text2 的末尾，取更大的，<kbd>max(dp[i-1][j], dp[i][j-1])</kbd></li>
+            <li>答案在右下角 <kbd>dp[m][n]</kbd></li>
+          </ol>
+        </Idea>
+        <table class="dp2" aria-label="abcde 与 ace 的 LCS 表">
+          <caption><kbd>abcde</kbd> × <kbd>ace</kbd>，右下角是 3</caption>
+          <thead>
+            <tr><th></th><th>∅</th><th>a</th><th>c</th><th>e</th></tr>
+          </thead>
+          <tbody>
+            <tr><th>∅</th><td>0</td><td>0</td><td>0</td><td>0</td></tr>
+            <tr><th>a</th><td>0</td><td>1</td><td>1</td><td>1</td></tr>
+            <tr><th>b</th><td>0</td><td>1</td><td>1</td><td>1</td></tr>
+            <tr><th>c</th><td>0</td><td>1</td><td>2</td><td>2</td></tr>
+            <tr><th>d</th><td>0</td><td>1</td><td>2</td><td>2</td></tr>
+            <tr><th>e</th><td>0</td><td>1</td><td>2</td><td class="ans">3</td></tr>
+          </tbody>
+        </table>
+        <CodeBlock code={lcsCode} lang="python" file="longest_common_subsequence.py" src={src('longest_common_subsequence.py')} />
+        <Complexity items={[
+          { l: '时间', v: 'O(mn)' },
+          { l: '空间', v: 'O(mn)' },
+          { l: '递推', v: '相同则 +1，否则取上或左' },
+        ]} />
+      </section>
+
+      <section class="article" id="edit-distance">
+        <div class="art-head"><span class="num">08</span><LcBadge kind="mid" text="LeetCode 72 · Medium" /></div>
+        <h3>编辑距离 Edit Distance</h3>
+        <p class="lead">把 <kbd>word1</kbd> 变成 <kbd>word2</kbd>，每次可以插入、删除或替换一个字符，最少操作几次。<kbd>horse</kbd> → <kbd>ros</kbd> 是 3 次。</p>
+        <h4 class="sub">解题思路 · 三个来路</h4>
+        <Idea>
+          <kbd>dp[i][j]</kbd> 是 <kbd>word1</kbd> 前 i 个变成 <kbd>word2</kbd> 前 j 个的最少操作。<kbd>dp[i][0] = i</kbd>（全删），<kbd>dp[0][j] = j</kbd>（全插）。
+          <ol class="steps">
+            <li>末尾字符相同：不用操作，<kbd>dp[i][j] = dp[i-1][j-1]</kbd></li>
+            <li>不相同：删除、插入、替换三选一，再加 1。<kbd>1 + min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1])</kbd></li>
+            <li><kbd>horse</kbd> → <kbd>ros</kbd>：替换 h→r，删掉 r，删掉 e。右下角是 3</li>
+          </ol>
+        </Idea>
+        <table class="dp2" aria-label="horse 变成 ros 的编辑距离表">
+          <caption><kbd>horse</kbd> → <kbd>ros</kbd>，右下角是 3</caption>
+          <thead>
+            <tr><th></th><th>∅</th><th>r</th><th>o</th><th>s</th></tr>
+          </thead>
+          <tbody>
+            <tr><th>∅</th><td>0</td><td>1</td><td>2</td><td>3</td></tr>
+            <tr><th>h</th><td>1</td><td>1</td><td>2</td><td>3</td></tr>
+            <tr><th>o</th><td>2</td><td>2</td><td>1</td><td>2</td></tr>
+            <tr><th>r</th><td>3</td><td>2</td><td>2</td><td>2</td></tr>
+            <tr><th>s</th><td>4</td><td>3</td><td>3</td><td>2</td></tr>
+            <tr><th>e</th><td>5</td><td>4</td><td>4</td><td class="ans">3</td></tr>
+          </tbody>
+        </table>
+        <CodeBlock code={minDistanceCode} lang="python" file="min_distance.py" src={src('min_distance.py')} />
+        <Complexity items={[
+          { l: '时间', v: 'O(mn)' },
+          { l: '空间', v: 'O(mn)' },
+          { l: '递推', v: '删、插、换的 min' },
         ]} />
       </section>
     </main>
   </div>
 </BaseLayout>
+
+<style>
+  table.dp2 {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 14px 0;
+    font-family: var(--font-mono);
+    font-size: 14px;
+  }
+  table.dp2 caption {
+    caption-side: bottom;
+    text-align: left;
+    padding-top: 8px;
+    color: var(--muted);
+    font-family: var(--font-body, inherit);
+    font-size: 13px;
+  }
+  table.dp2 th,
+  table.dp2 td {
+    border: 1px solid var(--line);
+    padding: 8px 10px;
+    text-align: center;
+  }
+  table.dp2 th {
+    color: var(--muted);
+    font-weight: 600;
+    background: var(--surface);
+  }
+  table.dp2 td.ans {
+    color: var(--orange);
+    background: #fdf3ee;
+    font-weight: 700;
+  }
+</style>

@@ -382,7 +382,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
       <section class="article" id="langgraph">
         <div class="art-head"><span class="num">08</span><LcBadge kind="hard" text="实现 · LangGraph" /></div>
         <h3>LangGraph：显式状态图</h3>
-        <p class="lead"><b>问题</b>：自己建图多写了一堆代码，换来什么？答案集中在一件事上——<b>可恢复</b>：状态、检查点、中断、恢复、重放和幂等。</p>
+        <p class="lead"><b>问题</b>：自己建图多写了一堆代码，换来什么？答案集中在一件事上——<b>可恢复</b>：状态、检查点、中断、恢复、重放和幂等。Command 四个参数怎么分场景，见 <a class="chapter-link" href={`${import.meta.env.BASE_URL}agent/langgraph`.replace(/\/+/g, '/')}>A06</a>。</p>
         <Idea>
           把循环画成六个节点，每条边都有名字：
           <ol class="steps">
@@ -540,6 +540,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
 </BaseLayout>
 
 <style>
+  .chapter-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
   ol.flow { list-style: none; margin: 10px 0 0; padding: 0; }
   ol.flow li { display: flex; gap: 12px; align-items: baseline; padding: 7px 0;
     border-bottom: 1px solid var(--line); font-size: 14.5px; color: var(--graphite); }
