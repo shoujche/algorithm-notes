@@ -1,0 +1,226 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import Interview from '../../components/Interview.astro';
+import Complexity from '../../components/Complexity.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import CodeTabs from '../../components/CodeTabs.astro';
+import Compare from '../../components/Compare.astro';
+import { chapters } from '../../data/topics';
+import { requestCycle, ormQueries, nPlusOne, transactionStock, drfApi, asyncTasks, CODE_DIR } from '../../data/django-code';
+import { compareVariants, COMPARE_DIR } from '../../data/framework-compare-code';
+import { ghBlob } from '../../lib/github';
+
+const chapter = chapters.find((c) => c.slug === 'django')!;
+const fullDoc = ghBlob('docs/python-frameworks/django.md');
+---
+<BaseLayout title="Django 核心用法 · Python 框架 · 算法与 Python 面试手记" active="framework">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Python 框架 / {chapter.num} · Django</span>
+        <h2><em>Django</em>:自带电池的<br />全栈 Web 框架</h2>
+        <p>ORM、迁移、Admin、认证、表单、模板全部内置并深度集成。这一章用单文件可运行的脚本讲请求生命周期、ORM 与 N+1、事务防超卖、DRF、异步与后台任务,每节都附一张与 Flask / FastAPI 的对比卡片。完整教程、速查表和面试题见 <a href={fullDoc} target="_blank" rel="noopener noreferrer">django.md ↗</a>。</p>
+        <div class="meta">
+          <div><span class="n">7</span><span class="l">Topics</span></div>
+          <div><span class="n">6.1</span><span class="l">Django</span></div>
+          <div><span class="n">单文件</span><span class="l">可运行</span></div>
+          <div><span class="n">对比</span><span class="l">三框架</span></div>
+        </div>
+      </div>
+
+      <!-- 01 请求生命周期 -->
+      <section class="article" id="request-cycle">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="基础 · Lifecycle" /></div>
+        <h3>请求生命周期与中间件</h3>
+        <p class="lead">一个请求进入 Django 后,依次经过 <b>中间件(请求方向)→ URLconf 匹配 → 视图 → 中间件(响应方向)</b>。中间件按 <kbd>MIDDLEWARE</kbd> 列表从上到下进入、从下到上返回,是标准的洋葱模型。</p>
+        <Idea>
+          Django 是 <b>MTV</b>:Model 管数据,Template 管展示,View 管逻辑(相当于 MVC 的 Controller)。URL 分发由框架完成。
+          <ol class="steps">
+            <li><b>中间件</b>是类:<kbd>__init__(get_response)</kbd> 启动时调一次,<kbd>__call__(request)</kbd> 每个请求调一次。</li>
+            <li><b>URLconf</b> 按顺序匹配,第一个命中就停;<kbd>&lt;int:pk&gt;</kbd> 自动转 int,不匹配直接 404。</li>
+            <li><b>视图</b>:函数视图(FBV)直观;类视图(CBV)按 HTTP 方法分发到同名方法,<kbd>as_view()</kbd> 每个请求新建实例。</li>
+            <li>永远用 <kbd>name</kbd> + <kbd>reverse()</kbd> 生成链接,不手写路径。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={requestCycle} lang="python" file="request_cycle.py" src={ghBlob(`${CODE_DIR}/request_cycle.py`)} />
+        <Complexity items={[
+          { l: '请求方向', v: 'MIDDLEWARE 从上到下' },
+          { l: '响应方向', v: '从下到上' },
+          { l: '实测顺序', v: 'outer → inner → view → inner → outer' },
+        ]} />
+        <Compare topic="请求怎么进来、中间件长什么样" current="django">
+          <Fragment slot="django"><kbd>request</kbd> 作为视图第一个参数<b>显式</b>传入;中间件是类,配置在 <kbd>settings.MIDDLEWARE</kbd>。</Fragment>
+          <Fragment slot="flask"><kbd>request</kbd> 是上下文全局代理(<b>隐式</b>);中间件拆成 <kbd>before_request</kbd> / <kbd>after_request</kbd> 钩子。</Fragment>
+          <Fragment slot="fastapi">用类型注解<b>声明</b>要什么参数;中间件是 <kbd>async def (request, call_next)</kbd>,另有依赖注入。</Fragment>
+          <Fragment slot="same">都是「服务器 → 中间件 → 路由 → 视图 → 中间件 → 响应」的洋葱结构。</Fragment>
+        </Compare>
+        <Interview q="Django 一个请求从进来到返回经历了什么?">
+          <p>WSGI / ASGI 服务器把请求交给 Django 的 Handler,构造 <kbd>HttpRequest</kbd>;按 <kbd>MIDDLEWARE</kbd> 顺序执行各中间件的请求阶段;按 <kbd>ROOT_URLCONF</kbd> 匹配 URL 找到视图;视图执行 ORM 查询、模板渲染,返回 <kbd>HttpResponse</kbd>;再<b>逆序</b>经过中间件的响应阶段,交回服务器。视图抛 <kbd>Http404</kbd> 会转成 404,未捕获异常在 <kbd>DEBUG=False</kbd> 时变成 500。中间件有依赖顺序,比如 <kbd>AuthenticationMiddleware</kbd> 必须在 <kbd>SessionMiddleware</kbd> 之后,因为 <kbd>request.user</kbd> 依赖 session。</p>
+        </Interview>
+      </section>
+
+      <!-- 02 ORM -->
+      <section class="article" id="orm">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="mid" text="核心 · ORM" /></div>
+        <h3>ORM 与惰性 QuerySet</h3>
+        <p class="lead">Django ORM 是 <b>Active Record</b> 风格:模型类自己负责持久化(<kbd>Book.objects.filter()</kbd>、<kbd>book.save()</kbd>)。最重要的特性是 <b>QuerySet 惰性求值</b>:链式调用只是在拼 SQL,迭代 / <kbd>list()</kbd> / <kbd>count()</kbd> 时才真正查库。</p>
+        <Idea>
+          记住四件工具就能写出大部分查询:
+          <ol class="steps">
+            <li><b>字段查找</b>:<kbd>title__icontains</kbd>、<kbd>price__gt</kbd>,双下划线还能跨关系 <kbd>author__name</kbd>。</li>
+            <li><b>Q</b>:组合 OR / NOT,<kbd>Q(a) | Q(b)</kbd>、<kbd>~Q(a)</kbd>。</li>
+            <li><b>F</b>:在数据库侧引用列值,<kbd>update(stock=F("stock") + 10)</kbd> 生成 <kbd>SET stock = stock + 10</kbd>,没有读改写竞态。</li>
+            <li><b>annotate / aggregate</b>:前者逐行附加聚合值(GROUP BY),后者整体汇总成 dict。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={ormQueries} lang="python" file="orm_queries.py" src={ghBlob(`${CODE_DIR}/orm_queries.py`)} />
+        <Complexity items={[
+          { l: '链式 filter', v: '0 条 SQL' },
+          { l: 'list(qs)', v: '1 条 SQL' },
+          { l: '存在判断', v: 'exists() 优于 count()' },
+        ]} />
+        <Compare topic="ORM 风格" current="django">
+          <Fragment slot="django">内置 ORM,<b>Active Record</b>:<kbd>Book.objects.filter(...)</kbd>,<kbd>makemigrations</kbd> 生成迁移。</Fragment>
+          <Fragment slot="flask">无内置,常用 Flask-SQLAlchemy:<kbd>db.select(Book).where(...)</kbd>,Flask-Migrate 管迁移。</Fragment>
+          <Fragment slot="fastapi">无内置,直接用 SQLAlchemy(<b>Data Mapper + Unit of Work</b>)+ Alembic,会话靠依赖注入。</Fragment>
+          <Fragment slot="same"><kbd>F("stock") - 1</kbd> ≈ SQLAlchemy 的 <kbd>Book.stock - 1</kbd>;都有惰性查询、事务、迁移的概念。</Fragment>
+        </Compare>
+        <Interview q="QuerySet 什么时候真正查询数据库?">
+          <p>QuerySet 是惰性的,<kbd>filter</kbd> / <kbd>exclude</kbd> / <kbd>order_by</kbd> 只是在构造 SQL。迭代、<kbd>list()</kbd>、<kbd>len()</kbd>、<kbd>bool()</kbd>、带步长的切片、<kbd>get()</kbd>、<kbd>count()</kbd>、<kbd>exists()</kbd> 等操作才触发查询。求值后结果缓存在这个 QuerySet 对象上,重复迭代不再查库;但每次链式调用都会产生新 QuerySet,缓存不共享。</p>
+        </Interview>
+        <Interview q="Django ORM 和 SQLAlchemy 有什么区别?">
+          <p>Django ORM 是 Active Record,模型自己负责持久化,API 简洁,与 Admin、Form、DRF 深度集成,但复杂 SQL 表达力有限,脱离 Django 很难用。SQLAlchemy 是 Data Mapper + Unit of Work,通过 Session 统一管理对象状态和提交,表达力更强、可以独立使用,学习曲线更陡。</p>
+        </Interview>
+      </section>
+
+      <!-- 03 N+1 -->
+      <section class="article" id="n-plus-one">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="hard" text="高频 · N+1" /></div>
+        <h3>N+1 与预加载</h3>
+        <p class="lead">循环里访问外键,每次都会再查一次数据库:1 条查列表 + N 条查关联,这就是 <b>N+1</b>。脚本用 <kbd>CaptureQueriesContext</kbd> 数清楚 3 个作者、6 本书时每种写法发了几条 SQL。</p>
+        <Idea>
+          按关系的方向选工具:
+          <ol class="steps">
+            <li><b>select_related</b>:SQL JOIN,一条查询取回。适合 ForeignKey / OneToOne 这种「指向一个对象」的关系。</li>
+            <li><b>prefetch_related</b>:先查主表,再用 <kbd>WHERE id IN (...)</kbd> 一次查出关联表,在 Python 里拼装。适合反向外键 / 多对多,避免 JOIN 行数膨胀。</li>
+            <li><b>坑</b>:预取之后又对关联管理器 <kbd>.filter()</kbd>,会绕过缓存重新查库。需要过滤时用 <kbd>Prefetch("books", queryset=...)</kbd>。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={nPlusOne} lang="python" file="n_plus_one.py" src={ghBlob(`${CODE_DIR}/n_plus_one.py`)} />
+        <Complexity items={[
+          { l: 'all()', v: '7 条' },
+          { l: 'select_related', v: '1 条' },
+          { l: 'prefetch_related', v: '2 条' },
+          { l: 'prefetch + filter', v: '5 条' },
+        ]} />
+        <Compare topic="防 N+1 的写法" current="django">
+          <Fragment slot="django"><kbd>select_related("author")</kbd> / <kbd>prefetch_related("books")</kbd>;测试里用 <kbd>assertNumQueries</kbd> 守住。</Fragment>
+          <Fragment slot="flask"><kbd>options(joinedload(Book.author))</kbd> / <kbd>selectinload(Author.books)</kbd>。</Fragment>
+          <Fragment slot="fastapi">同 SQLAlchemy;异步会话里<b>不能懒加载</b>,必须预加载,否则直接报错。</Fragment>
+          <Fragment slot="same">JOIN 适合「多对一」,IN 二次查询适合「一对多」,思路完全一致。</Fragment>
+        </Compare>
+        <Interview q="select_related 和 prefetch_related 的区别?">
+          <p><kbd>select_related</kbd> 用 SQL JOIN 在一条查询里把关联对象取回,适合外键和一对一这种指向单个对象的关系。<kbd>prefetch_related</kbd> 先查主表,再用 <kbd>IN</kbd> 单独查关联表,在 Python 里拼装,适合多对多和反向外键这种一对多关系,避免 JOIN 造成结果行数膨胀。两者都是为了解决 N+1。实测 6 本书:不优化 7 条,<kbd>select_related</kbd> 1 条,<kbd>prefetch_related</kbd> 2 条。</p>
+        </Interview>
+      </section>
+
+      <!-- 04 事务 -->
+      <section class="article" id="transaction">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="hard" text="并发 · Transaction" /></div>
+        <h3>事务与防超卖</h3>
+        <p class="lead">Django 默认是 <b>autocommit</b>:每条 SQL 自动提交。<kbd>transaction.atomic()</kbd> 把一段代码包成事务,块内抛异常整块回滚;嵌套使用时内层变成 savepoint。</p>
+        <Idea>
+          防超卖有两种标准写法:
+          <ol class="steps">
+            <li><b>条件更新</b>:<kbd>filter(pk=pk, stock__gt=0).update(stock=F("stock") - 1)</kbd>,一条 SQL 原子完成,看影响行数判断成败,0 行就返回 409。</li>
+            <li><b>悲观锁</b>:在事务里 <kbd>select_for_update()</kbd> 锁行再修改。SQLite 会忽略锁,PostgreSQL / MySQL 才生效。</li>
+            <li><b>副作用放 on_commit</b>:发邮件、入队任务用 <kbd>transaction.on_commit()</kbd>,事务回滚时不会执行。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={transactionStock} lang="python" file="transaction_stock.py" src={ghBlob(`${CODE_DIR}/transaction_stock.py`)} />
+        <Compare topic="原子扣库存" current="django">
+          <Fragment slot="django"><kbd>with transaction.atomic():</kbd> + <kbd>F("stock") - 1</kbd>,<kbd>update()</kbd> 直接返回影响行数。</Fragment>
+          <Fragment slot="flask"><kbd>db.update(Book).where(..., Book.stock &gt; 0)</kbd>,看 <kbd>result.rowcount</kbd>,再 <kbd>db.session.commit()</kbd>。</Fragment>
+          <Fragment slot="fastapi">与 Flask 相同的 SQLAlchemy 写法,只是 <kbd>session</kbd> 从依赖注入拿,失败 <kbd>raise HTTPException(409)</kbd>。</Fragment>
+          <Fragment slot="same">都靠「带条件的 UPDATE + 判断影响行数」,不在 Python 里读改写。</Fragment>
+        </Compare>
+        <Interview q="如何防止超卖?">
+          <p>两种方法。一是条件更新:<kbd>filter(pk=pk, stock__gt=0).update(stock=F("stock") - 1)</kbd>,数据库单条语句原子执行,根据影响行数判断成功与否。二是悲观锁:在 <kbd>transaction.atomic()</kbd> 里 <kbd>select_for_update()</kbd> 锁住行再改。高并发秒杀场景还可以把库存预扣放到 Redis,用 Lua 脚本保证原子性,再异步落库。</p>
+        </Interview>
+        <Interview q="信号(post_save)有什么坑?">
+          <p>信号是<b>同步</b>执行的,和业务在同一个事务、同一个线程里,耗时操作会拖慢请求;<kbd>QuerySet.update()</kbd> 和 <kbd>bulk_create()</kbd> 不会触发 <kbd>save</kbd> 相关信号;调用关系隐式,排查困难。需要异步副作用时,用 <kbd>transaction.on_commit</kbd> 加后台任务。</p>
+        </Interview>
+      </section>
+
+      <!-- 05 DRF -->
+      <section class="article" id="drf">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="mid" text="API · DRF" /></div>
+        <h3>DRF 序列化与视图集</h3>
+        <p class="lead">Django REST framework 是 Django 写 API 的事实标准:<b>Serializer</b> 负责校验与序列化,<b>ModelViewSet</b> 一个类给出完整 CRUD,<b>Router</b> 自动生成路由,权限、认证、分页、限流都是配置项。</p>
+        <Idea>
+          <ol class="steps">
+            <li>校验顺序:字段自身校验 → <kbd>validate_&lt;field&gt;()</kbd> → <kbd>validate(attrs)</kbd>(跨字段)。PATCH 只带部分字段,跨字段校验要从 <kbd>self.instance</kbd> 补齐。</li>
+            <li>一次返回<b>所有</b>字段错误(400),便于前端逐项提示。</li>
+            <li>ViewSet 的 <kbd>queryset</kbd> 上记得 <kbd>select_related</kbd>,否则嵌套序列化一样 N+1。</li>
+            <li><kbd>IsAuthenticatedOrReadOnly</kbd>:匿名只读,写操作 403。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={drfApi} lang="python" file="drf_api.py" src={ghBlob(`${CODE_DIR}/drf_api.py`)} />
+        <Compare topic="入参校验与序列化" current="django">
+          <Fragment slot="django">DRF <kbd>Serializer</kbd>:<kbd>validate_price</kbd> / <kbd>validate</kbd>,失败 400;文档需 drf-spectacular。</Fragment>
+          <Fragment slot="flask">框架不管,手写检查或接 Marshmallow / Pydantic;要文档用 flask-smorest / APIFlask。</Fragment>
+          <Fragment slot="fastapi">Pydantic <kbd>BaseModel</kbd>:<kbd>@field_validator</kbd> / <kbd>@model_validator</kbd>,失败自动 422,OpenAPI 自动生成。</Fragment>
+          <Fragment slot="same">都把「入参校验 + 出参序列化」集中到一个声明式的类里。</Fragment>
+        </Compare>
+        <Interview q="DRF Serializer 和 Pydantic 有什么异同?">
+          <p>两者都负责入参校验和出参序列化,单字段 / 跨字段校验的钩子也一一对应。差异在于:Pydantic 基于类型注解,FastAPI 能自动把它接到请求解析、422 错误和 OpenAPI 文档上;DRF 需要在视图里 <kbd>is_valid()</kbd>,文档要额外的库。反过来,DRF 的 <kbd>ModelSerializer</kbd> 能从模型自动推字段,这点 Pydantic 不具备。</p>
+        </Interview>
+      </section>
+
+      <!-- 06 异步与任务 -->
+      <section class="article" id="async-tasks">
+        <div class="art-head"><span class="num">06</span><LcBadge kind="mid" text="进阶 · Async" /></div>
+        <h3>异步视图与后台任务</h3>
+        <p class="lead">Django 3.1 起支持 <kbd>async def</kbd> 视图,4.1 起 ORM 有异步接口(<kbd>acount</kbd>、<kbd>afirst</kbd>、<kbd>async for</kbd>)。6.0 起内置 <b>Tasks 框架</b>(<kbd>django.tasks</kbd>),统一了「定义任务 / 入队」的 API。</p>
+        <Idea>
+          三个容易误解的点:
+          <ol class="steps">
+            <li><b>异步 ORM 底层仍走线程</b>;在事件循环里直接调同步 ORM 会抛 <kbd>SynchronousOnlyOperation</kbd>。</li>
+            <li><b>异步上下文没有 aatomic</b>:需要事务时写成同步函数,再用 <kbd>sync_to_async</kbd> 包一层。</li>
+            <li><b>Tasks 默认不是真异步</b>:内置的 <kbd>ImmediateBackend</kbd> 在入队时就同步执行完,状态直接是 <kbd>SUCCESSFUL</kbd>。生产要配第三方后端,或继续用 Celery。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={asyncTasks} lang="python" file="async_tasks.py" src={ghBlob(`${CODE_DIR}/async_tasks.py`)} />
+        <Compare topic="异步与后台任务" current="django">
+          <Fragment slot="django">同步为主、渐进支持异步;ASGI 部署才有并发收益。Tasks API 内置,真正执行靠外部 worker。</Fragment>
+          <Fragment slot="flask"><kbd>async def</kbd> 可用,但每个请求仍独占 WSGI worker,不提高吞吐;后台任务用 Celery / RQ。</Fragment>
+          <Fragment slot="fastapi">原生 ASGI,异步是一等公民;<kbd>BackgroundTasks</kbd> 在响应后同进程执行,重任务仍用 Celery。</Fragment>
+          <Fragment slot="same">可靠的后台任务(持久化、重试)三者都要靠外部队列。</Fragment>
+        </Compare>
+        <Interview q="Django 能做高并发吗?异步支持到什么程度?">
+          <p>Django 主要靠多进程(gunicorn workers)、缓存和数据库优化扛并发,对大多数业务足够。3.x 起支持 ASGI 和异步视图,ORM 也有异步接口,但 ORM 底层仍通过线程执行,异步上下文中不支持事务,生态里很多库也还是同步的。如果核心诉求是大量长连接、流式输出、IO 密集的高并发 API,FastAPI 更合适;常见组合是 Django 做后台和主站,FastAPI 做特定的高并发服务。</p>
+        </Interview>
+      </section>
+
+      <!-- 07 三框架对照 -->
+      <section class="article" id="compare">
+        <div class="art-head"><span class="num">07</span><LcBadge kind="base" text="对照 · Side by side" /></div>
+        <h3>同一接口三种写法</h3>
+        <p class="lead">同一个书店 API:创建(带校验)、查询(不存在返回 404)、购买(库存为 0 返回 409)。切换标签对比三个框架,每个文件都能直接运行。</p>
+        <CodeTabs variants={compareVariants('django')} dir={COMPARE_DIR} />
+        <Complexity items={[
+          { l: '校验失败', v: 'Django 400 · Flask 400 · FastAPI 422' },
+          { l: '路由', v: 'urls.py 集中 · 装饰器 · 装饰器' },
+          { l: '会话', v: '框架管理 · 应用上下文 · 依赖注入' },
+        ]} />
+        <Interview q="Django、Flask、FastAPI 怎么选?">
+          <p>业务模型复杂、需要后台和用户体系、追求交付速度,选 Django;轻量服务、需要高度定制或团队想自己挑组件,选 Flask;以 API 为主、追求高并发和自动文档、类型安全,或者做 LLM 流式服务,选 FastAPI。三者不互斥,Django 做管理后台 + FastAPI 做对外高并发接口是很常见的组合。</p>
+        </Interview>
+      </section>
+    </main>
+  </div>
+</BaseLayout>

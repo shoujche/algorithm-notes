@@ -2,7 +2,13 @@
 interface Props {
   kind?: 'base' | 'easy' | 'mid' | 'hard';
   text: string;
+  href?: string;
 }
-const { kind = 'base', text } = Astro.props;
+const { kind = 'base', text, href } = Astro.props;
+const cls = ['lc-badge', kind];
 ---
-<span class:list={['lc-badge', kind]}>{text}</span>
+{href ? (
+  <a class:list={cls} href={href} target="_blank" rel="noopener noreferrer" title="打开原题描述">{text}</a>
+) : (
+  <span class:list={cls}>{text}</span>
+)}

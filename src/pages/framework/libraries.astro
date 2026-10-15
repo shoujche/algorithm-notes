@@ -1,0 +1,137 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import Interview from '../../components/Interview.astro';
+import Complexity from '../../components/Complexity.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Compare from '../../components/Compare.astro';
+import { chapters } from '../../data/topics';
+import { peeweeOrm, memoryCache, sharedCache, CODE_DIR } from '../../data/libs-code';
+import { ghBlob } from '../../lib/github';
+
+const chapter = chapters.find((c) => c.slug === 'libraries')!;
+const fullDoc = ghBlob('docs/python-frameworks/libraries.md');
+---
+<BaseLayout title="常用第三方库 · Python 框架 · 算法与 Python 面试手记" active="framework">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Python 框架 / {chapter.num} · 常用第三方库</span>
+        <h2>数据库与缓存<br />这三个库最常被问到</h2>
+        <p>Django 自带 ORM 和缓存框架。Flask 和 FastAPI 要自己选：数据库通常是 <b>SQLAlchemy</b>，更小的服务可以用 <b>Peewee</b>；缓存先分清<b>进程内</b>（cachetools）和<b>多进程共享</b>（Redis、Memcached）。对照表、Memcached 和接入配置见 <a href={fullDoc} target="_blank" rel="noopener noreferrer">libraries.md ↗</a>。</p>
+        <div class="meta">
+          <div><span class="n">4</span><span class="l">Topics</span></div>
+          <div><span class="n">ORM</span><span class="l">Peewee</span></div>
+          <div><span class="n">缓存</span><span class="l">内存 / Redis</span></div>
+          <div><span class="n">可运行</span><span class="l">单文件</span></div>
+        </div>
+      </div>
+
+      <section class="article" id="peewee">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="mid" text="数据库 · ORM" /></div>
+        <h3>Peewee 与三种 ORM</h3>
+        <p class="lead">Peewee 的写法接近 Django：<kbd>Model.create()</kbd>、<kbd>select().where()</kbd>、<kbd>DoesNotExist</kbd>。它不管连接池和迁移，模型通过 <kbd>DatabaseProxy</kbd> 晚点再绑定真正的数据库。3 本书的外键访问，脚本数出来是 <b>4 / 1 / 2</b> 条 SELECT。</p>
+        <Idea>
+          <ol class="steps">
+            <li><b>直接点外键</b> <kbd>book.author.name</kbd>：1 条查书 + 每本书再查作者，3 本书是 4 条。</li>
+            <li><b>join</b>：<kbd>Book.select(Book, Author).join(Author)</kbd> 把作者列一起取回来，1 条。漏掉 <kbd>Author</kbd> 的 select，Peewee 还是会再查。</li>
+            <li><b>prefetch</b>：两条 SQL，先查一边再用 <kbd>IN</kbd> 查另一边。对应 Django 的 <kbd>prefetch_related</kbd>、SQLAlchemy 的 <kbd>selectinload</kbd>。</li>
+            <li><kbd>UPDATE</kbd> 不刷新已经在内存里的对象。脚本里旧对象的 <kbd>stock</kbd> 仍是 2，重新 <kbd>get_by_id</kbd> 才是 1。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={peeweeOrm} lang="python" file="peewee_orm.py" src={ghBlob(`${CODE_DIR}/peewee_orm.py`)} />
+        <Complexity items={[
+          { l: '懒加载外键', v: '4 条' },
+          { l: 'join', v: '1 条' },
+          { l: 'prefetch', v: '2 条' },
+        ]} />
+        <Compare topic="数据库层用什么">
+          <Fragment slot="django">自带 Django ORM，迁移、Admin、DRF 都认它。再加 Peewee 就是第二套连接和事务。</Fragment>
+          <Fragment slot="flask">默认 <b>Flask-SQLAlchemy</b>。模型少、不想写 Session 时用 Peewee，<kbd>db.atomic()</kbd> 自己管事务。</Fragment>
+          <Fragment slot="fastapi">默认 <b>SQLAlchemy</b>，Session 用 <kbd>yield</kbd> 依赖。Peewee 是同步库，路由写 <kbd>def</kbd>。</Fragment>
+          <Fragment slot="same"><kbd>F("stock") - 1</kbd>、<kbd>Book.stock - 1</kbd>、<kbd>Book.stock - 1</kbd>，都是让数据库做原子加减。</Fragment>
+        </Compare>
+        <Interview q="Django ORM、SQLAlchemy、Peewee 怎么选？">
+          <p>Django 项目用 Django ORM，它和迁移、Admin、DRF 是一套。Flask 和 FastAPI 优先 SQLAlchemy，预加载、异步和 Alembic 都成熟。Peewee 适合模型少、想少写 Session 样板的小服务，API 接近 Django，但没有内置迁移，也没有异步驱动。不建议在 Django 里再引入第二个 ORM。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="memory-cache">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="base" text="缓存 · 进程内" /></div>
+        <h3>进程内缓存 cachetools</h3>
+        <p class="lead"><kbd>cachetools</kbd> 就是带淘汰策略的字典，活在<b>当前进程</b>的内存里。没有网络开销，也没有序列化。<kbd>TTLCache</kbd> 到点过期，<kbd>LRUCache</kbd> 满了丢掉最久没人碰的那条。</p>
+        <Idea>
+          <ol class="steps">
+            <li>gunicorn 开 4 个 worker 就是 <b>4 份缓存</b>。重启、多机器都不共享。这种需求换 Redis。</li>
+            <li>cachetools 的缓存<b>不是线程安全的</b>。<kbd>@cached(cache, lock=threading.Lock())</kbd> 让后到的线程等到第一次写完，同一次过期窗口里不会算两遍。</li>
+            <li>标准库 <kbd>functools.lru_cache</kbd> 线程安全，但没有 TTL，适合不会过期的纯函数。</li>
+            <li>实测：<kbd>ttl=0.2</kbd> 时连续调用只计算 1 次，睡过 0.25 秒会再算 1 次。容量为 2 时，访问过 a 再插入 c，被淘汰的是 b。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={memoryCache} lang="python" file="memory_cache.py" src={ghBlob(`${CODE_DIR}/memory_cache.py`)} />
+        <Complexity items={[
+          { l: 'TTL 内', v: '算 1 次' },
+          { l: '过期后', v: '再算 1 次' },
+          { l: 'LRU 留下', v: 'a, c' },
+        ]} />
+        <Compare topic="进程内缓存用谁">
+          <Fragment slot="django">自带 <kbd>LocMemCache</kbd>，业务代码走 <kbd>django.core.cache.cache</kbd>，换后端不用改调用。</Fragment>
+          <Fragment slot="flask">Flask-Caching 的 <kbd>CACHE_TYPE = "SimpleCache"</kbd>，必须在应用上下文里用。</Fragment>
+          <Fragment slot="fastapi">没有内置。用 cachetools，或只缓存纯函数时用 <kbd>lru_cache</kbd>。</Fragment>
+          <Fragment slot="same">都只在本进程有效，不能拿来做跨 worker 的锁或会话。</Fragment>
+        </Compare>
+        <Interview q="cachetools 为什么要加锁？">
+          <p><kbd>TTLCache</kbd> 和 <kbd>LRUCache</kbd> 不保证线程安全，并发读写会破坏内部结构。<kbd>lock</kbd> 把一次「查、算、写」串起来，后来的线程会读到先到的结果。这把锁是进程内的，gunicorn 的每个 worker 各有一把，解决不了跨进程的重复计算。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="shared-cache">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="hard" text="缓存 · 共享" /></div>
+        <h3>Redis 与框架缓存</h3>
+        <p class="lead">多个 worker 要看同一份缓存，就得把它挪出进程。Redis 是默认选择；只做「键、值、过期」时 Memcached 也够。三个框架的业务代码最好都写成 <kbd>get / set / delete</kbd>，后端用配置换。</p>
+        <Idea>
+          <ol class="steps">
+            <li>Django 的 <kbd>get_or_set</kbd>：回调只在未命中时执行。开发用 <kbd>LocMemCache</kbd>，生产把 <kbd>BACKEND</kbd> 换成 <kbd>RedisCache</kbd> 或 <kbd>PyMemcacheCache</kbd>，调用不用改。Redis 后端是 Django 自带的。</li>
+            <li>Flask-Caching 同理：<kbd>SimpleCache</kbd> 换成 <kbd>RedisCache</kbd>，配 <kbd>CACHE_REDIS_URL</kbd> 和 <kbd>CACHE_KEY_PREFIX</kbd>。<kbd>add</kbd> 是「没有才写」，已存在返回 <kbd>False</kbd>。</li>
+            <li>redis-py 直接用时，值是字符串，结构化数据自己 <kbd>json</kbd>。<kbd>set(..., ex=30, nx=True)</kbd>：<kbd>ex</kbd> 是过期秒数，<kbd>nx</kbd> 表示已有值就不覆盖。</li>
+            <li><kbd>nx</kbd> 挡不住缓存击穿：过期瞬间大家都会去算。它只保证后写的人不覆盖先写的结果。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={sharedCache} lang="python" file="shared_cache.py" src={ghBlob(`${CODE_DIR}/shared_cache.py`)} />
+        <Complexity items={[
+          { l: 'Django', v: 'LocMem → RedisCache' },
+          { l: 'Flask', v: 'SimpleCache → RedisCache' },
+          { l: 'FastAPI', v: 'redis.asyncio，放 lifespan' },
+        ]} />
+        <Compare topic="共享缓存怎么接">
+          <Fragment slot="django"><kbd>CACHES["BACKEND"]</kbd> 换成 <kbd>RedisCache</kbd>，<kbd>LOCATION</kbd> 用 <kbd>REDIS_URL</kbd>。Memcached 用 <kbd>PyMemcacheCache</kbd>。</Fragment>
+          <Fragment slot="flask">Flask-Caching：<kbd>CACHE_TYPE="RedisCache"</kbd>，URL 用 <kbd>CACHE_REDIS_URL</kbd>。扩展同样是 <kbd>init_app</kbd>。</Fragment>
+          <Fragment slot="fastapi">lifespan 里建一个 <kbd>redis.asyncio</kbd> 客户端挂到 <kbd>app.state</kbd>。同步客户端会阻塞，放 <kbd>def</kbd> 路由。</Fragment>
+          <Fragment slot="same">key 带业务前缀，值用 JSON，每条缓存都有 TTL，地址从环境变量读。</Fragment>
+        </Compare>
+        <Interview q="进程内缓存和 Redis 差在哪？什么是缓存击穿？">
+          <p>进程内缓存没有网络开销，但每个 worker 一份，重启就没了。Redis 是独立进程，所有 worker 共用，可以设 TTL，代价是一次网络往返和序列化。缓存击穿是热点 key 过期的瞬间，大量请求同时未命中、一起打到数据库。<kbd>set(nx=True)</kbd> 只能避免互相覆盖，不能避免重复计算；要只算一次，得加一把短锁，或者在过期前主动刷新。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="choose">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="base" text="选型" /></div>
+        <h3>怎么选</h3>
+        <p class="lead">数据库按框架选，缓存按进程数选。Memcached 只做缓存；还要用它当任务队列、分布式锁或发布订阅，就用 Redis。</p>
+        <Idea>
+          <ol class="steps">
+            <li><b>数据库</b>：Django 用自带 ORM。Flask / FastAPI 用 SQLAlchemy。Peewee 留给模型很少的小服务。</li>
+            <li><b>缓存</b>：一个进程、丢了能重算，用 LocMem、SimpleCache 或 cachetools。多个 worker 或要跨机器，用 Redis；只需要键值加过期，Memcached 更单纯。</li>
+            <li><b>不要</b>把 ORM 对象、连接、密码放进缓存。pickle 不可信的缓存内容。</li>
+          </ol>
+        </Idea>
+        <Interview q="Redis 和 Memcached 怎么选？">
+          <p>两者都能做带 TTL 的共享缓存。Memcached 只有键值，协议简单，没有持久化。Redis 还有列表、集合、发布订阅、Lua，也常被拿去当 Celery 的 broker 和分布式锁。只是缓存、想要更窄的功能面，用 Memcached；缓存之外还有别的用途，用 Redis。Django 和 Flask 都有两边的现成后端，业务代码不用改。</p>
+        </Interview>
+      </section>
+    </main>
+  </div>
+</BaseLayout>

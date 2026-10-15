@@ -1,0 +1,141 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Interview from '../../components/Interview.astro';
+import { chapters } from '../../data/topics';
+import {
+  CODE_DIR,
+  indexRetrieve,
+  ingestion,
+  keywordEmbed,
+  metadataFilter,
+  queryEngine,
+  splitNodes,
+  workflowRag,
+} from '../../data/llamaindex-code';
+import { ghBlob } from '../../lib/github';
+import { withBase } from '../../lib/url';
+
+const chapter = chapters.find((item) => item.slug === 'llamaindex')!;
+const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
+const a03 = withBase('/agent/rag-interview');
+const a06 = withBase('/agent/langgraph');
+---
+<BaseLayout title="LlamaIndex 核心用法 · Agent · 算法、Python 与 Agent 学习手记" active="agent">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Agent / {chapter.num} · LlamaIndex</span>
+        <h2>资料先变成<em>可检索的节点</em></h2>
+        <p>LlamaIndex 管离线的切块、向量和在线的检索。面试里的取舍在 <a class="chapter-link" href={a03}>A03</a>，下一步走哪、在哪暂停交给 <a class="chapter-link" href={a06}>A06 LangGraph</a>。例子不调用真实模型：向量用词是否出现来代替，回答从检索到的原文里摘。安装 <kbd>llama-index-core</kbd> 0.14 即可，不需要 API key。在 <kbd>src/code/agent/llamaindex</kbd> 目录下运行对应文件。</p>
+        <div class="meta">
+          <div><span class="n">07</span><span class="l">Topics</span></div>
+          <div><span class="n">Node</span><span class="l">切块</span></div>
+          <div><span class="n">Retriever</span><span class="l">只取回节点</span></div>
+          <div><span class="n">不调模型</span><span class="l">可本地跑</span></div>
+        </div>
+      </div>
+
+      <section class="article" id="embed">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="基础 · Embedding" /></div>
+        <h3>先有一个不联网的向量</h3>
+        <p class="lead">索引不关心向量怎么来的。这里每一维是一个词，原文或问题里出现就记 1。换上真实 embedding 模型时，后面的 Index 调用不用改。</p>
+        <table class="cmp">
+          <thead>
+            <tr><th>对象</th><th>手里有什么</th><th>不负责什么</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><kbd>Document</kbd></td><td>一整份原文，外加 metadata</td><td>还不检索</td></tr>
+            <tr><td><kbd>Node</kbd></td><td>切出来的一块，带着同一份 metadata</td><td>自己不算相似度</td></tr>
+            <tr><td><kbd>Index</kbd></td><td>这些 Node 和它们的向量</td><td>不写最终回答</td></tr>
+            <tr><td><kbd>Retriever</kbd></td><td>按问题取回 Node 和分数</td><td>不调用 LLM</td></tr>
+            <tr><td><kbd>Query engine</kbd></td><td>把取回的原文交给 LLM，并留下 source</td><td>不决定下一步走哪</td></tr>
+          </tbody>
+        </table>
+        <CodeBlock code={keywordEmbed} lang="python" file="keyword_embed.py" src={src('keyword_embed.py')} />
+        <p class="cue"><span class="t">记忆提示</span>metadata 里的城市不会进这组向量。硬条件留到后面的过滤器。</p>
+      </section>
+
+      <section class="article" id="split">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="base" text="基础 · Node" /></div>
+        <h3>一份原文切成节点</h3>
+        <p class="lead"><kbd>SentenceSplitter</kbd> 按 token 预算切。预算够两句就留在一个 Node 里，不够就从句子边界切开。metadata 会复制到每一块。</p>
+        <Idea>
+          <ol class="steps">
+            <li><kbd>chunk_size</kbd> 按 token 计，不是按字符。</li>
+            <li>metadata 也占这份预算。块太小时，库会警告 metadata 几乎占满了块。</li>
+            <li>下面这个 24，刚好把两句酒店说明切开，又不会从句子中间断开。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={splitNodes} lang="python" file="split_nodes.py" src={src('split_nodes.py')} />
+        <p class="cue"><span class="t">记忆提示</span>控制台那句 metadata length 不是失败。它在说：metadata 也算进 chunk 的 token。</p>
+      </section>
+
+      <section class="article" id="index">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="mid" text="核心 · Retriever" /></div>
+        <h3>建索引，只把节点取回来</h3>
+        <p class="lead"><kbd>from_documents</kbd> 会切块并写入向量。<kbd>as_retriever</kbd> 返回的是节点和分数，不是一段生成的话。不传入 <kbd>embed_model</kbd> 时，Index 会去找默认的在线模型。</p>
+        <CodeBlock code={indexRetrieve} lang="python" file="index_retrieve.py" src={src('index_retrieve.py')} />
+        <p class="cue"><span class="t">记忆提示</span>查询「London」时 Ritz 的分数是 0.5，McKittrick 是 0。<kbd>similarity_top_k=2</kbd> 仍会把 0 分那条填进来。有没有查到，看分数，不看列表里有没有名字。</p>
+      </section>
+
+      <section class="article" id="query">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="核心 · Query" /></div>
+        <h3>检索之后才交给模型</h3>
+        <p class="lead">Query engine 先做上一节的检索，再把节点文本放进 prompt。<kbd>source_nodes</kbd> 还在，所以回答可以指回原文。这里的模型不联网，只从 prompt 里摘出含价格的那一行。</p>
+        <CodeBlock code={queryEngine} lang="python" file="query_engine.py" src={src('query_engine.py')} />
+        <Interview q="回答错了，先看模型还是先看检索？">
+          <p>先看 <kbd>source_nodes</kbd>。里面没有正确原文，就是检索错了，改切块、向量或过滤。原文在，回答却跑偏，才是生成错了。A03 把这两类分开讲。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="filter">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="mid" text="核心 · Filter" /></div>
+        <h3>向量管相似，metadata 管硬条件</h3>
+        <p class="lead">「per night」两家酒店都沾边。城市不是向量能保证的条件：用户要纽约，就用过滤器把伦敦拿掉，而不是指望 embedding 碰巧不返回它。</p>
+        <CodeBlock code={metadataFilter} lang="python" file="metadata_filter.py" src={src('metadata_filter.py')} />
+        <p class="cue"><span class="t">记忆提示</span>过滤器在检索时生效，不是生成完再删句子。权限、租户、日期都属于这一层。</p>
+      </section>
+
+      <section class="article" id="pipeline">
+        <div class="art-head"><span class="num">06</span><LcBadge kind="base" text="入库 · Pipeline" /></div>
+        <h3>把藏起来的两步写明</h3>
+        <p class="lead"><kbd>from_documents</kbd> 内部就是切块再嵌入。<kbd>IngestionPipeline</kbd> 把这两步放进 <kbd>transformations</kbd>，跑完的 Node 上已经有 <kbd>embedding</kbd>。要换切分方式或向量模型时，改这个列表。</p>
+        <CodeBlock code={ingestion} lang="python" file="ingestion.py" src={src('ingestion.py')} />
+      </section>
+
+      <section class="article" id="workflow">
+        <div class="art-head"><span class="num">07</span><LcBadge kind="mid" text="编排 · Workflow" /></div>
+        <h3>检索和作答分成两步</h3>
+        <p class="lead">Workflow 的一步接收上一步的事件。<kbd>run()</kbd> 要在已经跑起来的事件循环里调用，所以外面套 <kbd>asyncio.run</kbd>。这一步的作答直接从原文摘价格；生产里这里接 query engine。多步循环和暂停仍用 LangGraph。</p>
+        <CodeBlock code={workflowRag} lang="python" file="workflow_rag.py" src={src('workflow_rag.py')} />
+        <Interview q="LlamaIndex 和 LangGraph 各放什么？">
+          <p>LlamaIndex 放资料：Document、Node、索引、过滤器和带来源的回答。LangGraph 放控制流：下一步走哪个节点、在哪暂停、同一条线程记哪些消息。不要在 Workflow 里再做一个 ReAct 循环，也不要让 LangGraph 的节点自己切块。</p>
+        </Interview>
+      </section>
+    </main>
+  </div>
+</BaseLayout>
+
+<style>
+  .chapter-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+
+  p.cue { margin: 18px 0 0; padding-left: 13px; border-left: 2px solid var(--teal);
+    font-size: 14.5px; color: var(--graphite); }
+  p.cue .t { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.4px;
+    color: var(--teal); margin-right: 8px; }
+
+  table.cmp { width: 100%; border-collapse: collapse; margin: 14px 0 4px; font-size: 14px;
+    display: block; overflow-x: auto; }
+  table.cmp th, table.cmp td { text-align: left; padding: 9px 12px;
+    border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.cmp th { font-family: var(--font-mono); font-size: 10.5px; font-weight: 600;
+    letter-spacing: 0.4px; color: var(--muted); white-space: nowrap; }
+  table.cmp td { color: var(--graphite); }
+  table.cmp td:first-child { color: var(--ink); white-space: nowrap; }
+  table.cmp tbody tr:last-child td { border-bottom: none; }
+</style>

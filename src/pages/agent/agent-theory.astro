@@ -8,6 +8,7 @@ import Interview from '../../components/Interview.astro';
 import { chapters } from '../../data/topics';
 import { CODE_DIR, decode } from '../../data/agent-theory-code';
 import { ghBlob } from '../../lib/github';
+import { withBase } from '../../lib/url';
 
 const chapter = chapters.find((item) => item.slug === 'agent-theory')!;
 ---
@@ -221,7 +222,7 @@ const chapter = chapters.find((item) => item.slug === 'agent-theory')!;
         </RagQuestion>
       </section>
 
-      <p class="source-note">题目来源：<a href="https://github.com/adongwanai/AgentGuide/blob/main/docs/04-interview/01-theory-questions.md" target="_blank" rel="noopener noreferrer">AgentGuide · 理论基础篇 ↗</a>。未收录手推公式、分布式并行细节和空题干的算法岗专题；需要 RAG 系统题见 <a href={`${import.meta.env.BASE_URL}agent/rag-interview`.replace(/\/+/g, '/')}>A03</a>。</p>
+      <p class="source-note">题目来源：<a href="https://github.com/adongwanai/AgentGuide/blob/main/docs/04-interview/01-theory-questions.md" target="_blank" rel="noopener noreferrer">AgentGuide · 理论基础篇 ↗</a>。未收录手推公式、分布式并行细节和空题干的算法岗专题；需要 RAG 系统题见 <a href={withBase('/agent/rag-interview')}>A03</a>。</p>
     </main>
   </div>
 </BaseLayout>

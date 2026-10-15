@@ -62,6 +62,31 @@ npm run preview  # 本地预览构建结果
 
 > 网页上每个代码块右上角的文件名都可点击，会直接跳到上面对应的 GitHub 源文件。
 
+- Python 框架板块源码：[`src/code/framework/`](https://github.com/shoujche/algorithm-notes/tree/main/src/code/framework)。每个文件都是单文件脚本，直接 `python xxx.py` 运行（Django 用 `settings.configure()` + 内存 SQLite，不需要建项目）。
+- 四份长文档（核心用法 · 常用方法 · 教程 · 工程实践 · 面试题）：[`django.md`](https://github.com/shoujche/algorithm-notes/blob/main/docs/python-frameworks/django.md) · [`flask.md`](https://github.com/shoujche/algorithm-notes/blob/main/docs/python-frameworks/flask.md) · [`fastapi.md`](https://github.com/shoujche/algorithm-notes/blob/main/docs/python-frameworks/fastapi.md) · [`libraries.md`](https://github.com/shoujche/algorithm-notes/blob/main/docs/python-frameworks/libraries.md)
+
+| 文件 | 说明 |
+| --- | --- |
+| [`django/request_cycle.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/django/request_cycle.py) | 中间件洋葱顺序、FBV / CBV、URLconf 与 `reverse` |
+| [`django/orm_queries.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/django/orm_queries.py) | 惰性 QuerySet、字段查找、Q / F、annotate / aggregate |
+| [`django/n_plus_one.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/django/n_plus_one.py) | 数 SQL 条数：`all()` 7 条、`select_related` 1 条、`prefetch_related` 2 条 |
+| [`django/transaction_stock.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/django/transaction_stock.py) | `atomic`、F 条件更新防超卖、`select_for_update`、`on_commit`、savepoint |
+| [`django/drf_api.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/django/drf_api.py) | DRF Serializer 校验、ModelViewSet、Router、权限 |
+| [`django/async_tasks.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/django/async_tasks.py) | 异步视图与异步 ORM、`SynchronousOnlyOperation`、内置 Tasks 框架 |
+| [`flask/app_basics.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/flask/app_basics.py) | 路由、取参数、视图返回值、`url_for`、`abort` |
+| [`flask/contexts.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/flask/contexts.py) | 应用 / 请求上下文、`g`、session 可解码、线程隔离 |
+| [`flask/factory_blueprint.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/flask/factory_blueprint.py) | 应用工厂、蓝图、扩展 `init_app`、`from_prefixed_env` |
+| [`flask/sqlalchemy_crud.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/flask/sqlalchemy_crud.py) | Flask-SQLAlchemy 3.x 模型、`db.select`、`joinedload`、原子扣库存 |
+| [`flask/hooks_errors.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/flask/hooks_errors.py) | 钩子执行顺序、短路、统一 JSON 错误 |
+| [`flask/testing_async.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/flask/testing_async.py) | 测试工具；真实单线程服务器实测 async 视图不提高吞吐 |
+| [`fastapi/concurrency.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/fastapi/concurrency.py) · [`pydantic_demo.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/fastapi/pydantic_demo.py) · [`dependency.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/fastapi/dependency.py) · [`middleware.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/fastapi/middleware.py) · [`streaming.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/fastapi/streaming.py) | FastAPI 并发模型、Pydantic、依赖注入、中间件与 lifespan、流式响应 |
+| [`compare/bookshop_django.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/compare/bookshop_django.py) · [`bookshop_flask.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/compare/bookshop_flask.py) · [`bookshop_fastapi.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/compare/bookshop_fastapi.py) | 同一个书店接口的三种写法：创建（校验）/ 查询（404）/ 购买（409） |
+| [`libs/peewee_orm.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/libs/peewee_orm.py) | Peewee：`DatabaseProxy`、join / prefetch 的 SQL 条数、条件更新 |
+| [`libs/memory_cache.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/libs/memory_cache.py) | cachetools：`TTLCache`、`LRUCache`、带锁的 `@cached` |
+| [`libs/shared_cache.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/framework/libs/shared_cache.py) | Django LocMem、Flask-Caching SimpleCache、redis-py 的 `get_or_set` |
+
+数据库与缓存的选型说明（SQLAlchemy、Peewee、cachetools、Redis、Memcached，以及三个框架怎么接）：[`libraries.md`](https://github.com/shoujche/algorithm-notes/blob/main/docs/python-frameworks/libraries.md)。
+
 - ReAct Agent 章节全部源码：[`src/code/agent/react-agent-loop/`](https://github.com/shoujche/algorithm-notes/tree/main/src/code/agent/react-agent-loop)
 
 | 文件 | 说明 |
@@ -135,6 +160,18 @@ Agent 核心真题（A04）是问答页，没有单独源码文件。
 | [`run_controls.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/langgraph/run_controls.py) | 步数上限、重试、落盘与流式 |
 | [`send_fanout.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/langgraph/send_fanout.py) | `Send` 扇出 |
 | [`memory_store.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/langgraph/memory_store.py) | 检查点按线程，Store 跨线程 |
+
+- LlamaIndex 核心用法章节源码：[`src/code/agent/llamaindex/`](https://github.com/shoujche/algorithm-notes/tree/main/src/code/agent/llamaindex)
+
+| 文件 | 说明 |
+| --- | --- |
+| [`keyword_embed.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/llamaindex/keyword_embed.py) | 用词是否出现代替 embedding，并准备两份酒店 Document |
+| [`split_nodes.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/llamaindex/split_nodes.py) | SentenceSplitter 把一份 Document 切成 Node |
+| [`index_retrieve.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/llamaindex/index_retrieve.py) | VectorStoreIndex 与 Retriever，分数为 0 不算查到 |
+| [`query_engine.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/llamaindex/query_engine.py) | Query Engine 把检索到的原文交给 LLM |
+| [`metadata_filter.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/llamaindex/metadata_filter.py) | 向量相似度之外的 metadata 硬条件 |
+| [`ingestion.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/llamaindex/ingestion.py) | IngestionPipeline 把切块和向量写明 |
+| [`workflow_rag.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/llamaindex/workflow_rag.py) | Workflow 把检索和作答分成两步 |
 
 ## 新增章节
 

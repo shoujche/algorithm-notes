@@ -36,6 +36,7 @@ import {
   skillDoc,
 } from '../../data/react-agent-loop-code';
 import { ghBlob } from '../../lib/github';
+import { withBase } from '../../lib/url';
 
 const chapter = chapters.find((c) => c.slug === 'react-agent-loop')!;
 const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
@@ -382,7 +383,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
       <section class="article" id="langgraph">
         <div class="art-head"><span class="num">08</span><LcBadge kind="hard" text="实现 · LangGraph" /></div>
         <h3>LangGraph：显式状态图</h3>
-        <p class="lead"><b>问题</b>：自己建图多写了一堆代码，换来什么？答案集中在一件事上——<b>可恢复</b>：状态、检查点、中断、恢复、重放和幂等。Command 四个参数怎么分场景，见 <a class="chapter-link" href={`${import.meta.env.BASE_URL}agent/langgraph`.replace(/\/+/g, '/')}>A06</a>。</p>
+        <p class="lead"><b>问题</b>：自己建图多写了一堆代码，换来什么？答案集中在一件事上——<b>可恢复</b>：状态、检查点、中断、恢复、重放和幂等。Command 四个参数怎么分场景，见 <a class="chapter-link" href={withBase('/agent/langgraph')}>A06</a>。</p>
         <Idea>
           把循环画成六个节点，每条边都有名字：
           <ol class="steps">

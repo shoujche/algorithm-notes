@@ -2,7 +2,7 @@
 
 export type Difficulty = 'base' | 'easy' | 'mid' | 'hard';
 
-export const categoryKeys = ['algo', 'python', 'agent'] as const;
+export const categoryKeys = ['algo', 'python', 'framework', 'agent'] as const;
 export type Category = (typeof categoryKeys)[number];
 
 export interface Section {
@@ -10,11 +10,12 @@ export interface Section {
   num: string;       // 序号，如 "01"
   label: string;     // 显示名
   lc?: string;       // LeetCode 题号
+  lcSlug?: string;   // leetcode.cn 题目 slug，用于打开原题描述
 }
 
 export interface Chapter {
   slug: string;      // 路由由 categoryConfig 中的 routePrefix 统一决定
-  category: Category; // 归属板块：算法 / Python / Agent
+  category: Category; // 归属板块：算法 / Python 基础 / Python 框架 / Agent
   num: string;       // 章节序号
   cn: string;        // 中文名
   en: string;        // 英文名
@@ -35,8 +36,8 @@ export const chapters: Chapter[] = [
     sections: [
       { id: 'singly', num: '01', label: '单向链表' },
       { id: 'doubly', num: '02', label: '双向链表' },
-      { id: 'reverse', num: '03', label: '链表反转', lc: '206' },
-      { id: 'lru', num: '04', label: 'LRU 缓存', lc: '146' },
+      { id: 'reverse', num: '03', label: '链表反转', lc: '206', lcSlug: 'reverse-linked-list' },
+      { id: 'lru', num: '04', label: 'LRU 缓存', lc: '146', lcSlug: 'lru-cache' },
     ],
   },
   { slug: 'stack-queue', category: 'algo', num: '02', cn: '栈与队列', en: 'Stack & Queue', summary: '规划中。', ready: false },
@@ -50,11 +51,11 @@ export const chapters: Chapter[] = [
     ready: true,
     sections: [
       { id: 'basics', num: '01', label: '构建与遍历' },
-      { id: 'level-order', num: '02', label: '层序遍历', lc: '102' },
-      { id: 'zigzag', num: '03', label: '锯齿形层序', lc: '103' },
-      { id: 'right-view', num: '04', label: '右视图', lc: '199' },
-      { id: 'lca', num: '05', label: '最近公共祖先', lc: '236' },
-      { id: 'completeness', num: '06', label: '完全性检验', lc: '958' },
+      { id: 'level-order', num: '02', label: '层序遍历', lc: '102', lcSlug: 'binary-tree-level-order-traversal' },
+      { id: 'zigzag', num: '03', label: '锯齿形层序', lc: '103', lcSlug: 'binary-tree-zigzag-level-order-traversal' },
+      { id: 'right-view', num: '04', label: '右视图', lc: '199', lcSlug: 'binary-tree-right-side-view' },
+      { id: 'lca', num: '05', label: '最近公共祖先', lc: '236', lcSlug: 'lowest-common-ancestor-of-a-binary-tree' },
+      { id: 'completeness', num: '06', label: '完全性检验', lc: '958', lcSlug: 'check-completeness-of-a-binary-tree' },
     ],
   },
   {
@@ -66,14 +67,14 @@ export const chapters: Chapter[] = [
     summary: '先把整张 dp 表填出来：爬楼梯、最小花费、最大子数组和、打家劫舍，再到零钱兑换、上升子序列、公共子序列和编辑距离。',
     ready: true,
     sections: [
-      { id: 'climb-stairs', num: '01', label: '爬楼梯', lc: '70' },
-      { id: 'min-cost', num: '02', label: '最小花费爬楼梯', lc: '746' },
-      { id: 'max-subarray', num: '03', label: '最大子数组和', lc: '53' },
-      { id: 'house-robber', num: '04', label: '打家劫舍', lc: '198' },
-      { id: 'coin-change', num: '05', label: '零钱兑换', lc: '322' },
-      { id: 'lis', num: '06', label: '最长递增子序列', lc: '300' },
-      { id: 'lcs', num: '07', label: '最长公共子序列', lc: '1143' },
-      { id: 'edit-distance', num: '08', label: '编辑距离', lc: '72' },
+      { id: 'climb-stairs', num: '01', label: '爬楼梯', lc: '70', lcSlug: 'climbing-stairs' },
+      { id: 'min-cost', num: '02', label: '最小花费爬楼梯', lc: '746', lcSlug: 'min-cost-climbing-stairs' },
+      { id: 'max-subarray', num: '03', label: '最大子数组和', lc: '53', lcSlug: 'maximum-subarray' },
+      { id: 'house-robber', num: '04', label: '打家劫舍', lc: '198', lcSlug: 'house-robber' },
+      { id: 'coin-change', num: '05', label: '零钱兑换', lc: '322', lcSlug: 'coin-change' },
+      { id: 'lis', num: '06', label: '最长递增子序列', lc: '300', lcSlug: 'longest-increasing-subsequence' },
+      { id: 'lcs', num: '07', label: '最长公共子序列', lc: '1143', lcSlug: 'longest-common-subsequence' },
+      { id: 'edit-distance', num: '08', label: '编辑距离', lc: '72', lcSlug: 'edit-distance' },
     ],
   },
 
@@ -128,16 +129,7 @@ export const chapters: Chapter[] = [
       { id: 'pitfalls', num: '05', label: '常见坑:阻塞事件循环' },
     ],
   },
-  { slug: 'fastapi', category: 'python', num: 'P06', cn: 'FastAPI 工程', en: 'FastAPI', summary: '依赖注入、Pydantic、并发模型、中间件、流式响应。', ready: true,
-    sections: [
-      { id: 'concurrency-model', num: '01', label: '并发模型:async vs sync 路由' },
-      { id: 'pydantic', num: '02', label: 'Pydantic 数据校验' },
-      { id: 'di', num: '03', label: '依赖注入' },
-      { id: 'middleware', num: '04', label: '中间件与生命周期' },
-      { id: 'streaming', num: '05', label: '流式响应' },
-    ],
-  },
-  { slug: 'network-streaming', category: 'python', num: 'P07', cn: '网络与流式', en: 'Network & Streaming', summary: 'HTTP 基础、SSE vs WebSocket、流式输出。', ready: true,
+  { slug: 'network-streaming', category: 'python', num: 'P06', cn: '网络与流式', en: 'Network & Streaming', summary: 'HTTP 基础、SSE vs WebSocket、流式输出。', ready: true,
     sections: [
       { id: 'http', num: '01', label: 'HTTP 基础与常见状态码' },
       { id: 'sse-vs-ws', num: '02', label: 'SSE vs WebSocket' },
@@ -145,13 +137,83 @@ export const chapters: Chapter[] = [
       { id: 'backpressure', num: '04', label: '背压与超时' },
     ],
   },
-  { slug: 'hands-on', category: 'python', num: 'P08', cn: '实战手撕', en: 'Hands-on Coding', summary: '手写装饰器、异步限流器、简易 tool-calling loop 等经典手撕题。', ready: true,
+  { slug: 'hands-on', category: 'python', num: 'P07', cn: '实战手撕', en: 'Hands-on Coding', summary: '手写装饰器、异步限流器、简易 tool-calling loop 等经典手撕题。', ready: true,
     sections: [
       { id: 'timer-decorator', num: '01', label: '手写计时/重试装饰器' },
-      { id: 'lru', num: '02', label: '手写 LRU 缓存' },
+      { id: 'lru', num: '02', label: '手写 LRU 缓存', lc: '146', lcSlug: 'lru-cache' },
       { id: 'rate-limiter', num: '03', label: '异步限流器' },
       { id: 'async-pool', num: '04', label: '异步并发池' },
       { id: 'tool-loop', num: '05', label: '简易 tool-calling loop' },
+    ],
+  },
+
+  // ===== Python 框架板块 =====
+  {
+    slug: 'django',
+    category: 'framework',
+    num: 'F01',
+    cn: 'Django 核心用法',
+    en: 'Django',
+    summary: '请求生命周期、ORM 与 N+1、事务防超卖、DRF、异步视图与内置 Tasks，每节附与 Flask / FastAPI 的对照。',
+    ready: true,
+    sections: [
+      { id: 'request-cycle', num: '01', label: '请求生命周期与中间件' },
+      { id: 'orm', num: '02', label: 'ORM 与惰性 QuerySet' },
+      { id: 'n-plus-one', num: '03', label: 'N+1 与预加载' },
+      { id: 'transaction', num: '04', label: '事务与防超卖' },
+      { id: 'drf', num: '05', label: 'DRF 序列化与视图集' },
+      { id: 'async-tasks', num: '06', label: '异步视图与后台任务' },
+      { id: 'compare', num: '07', label: '同一接口三种写法' },
+    ],
+  },
+  {
+    slug: 'flask',
+    category: 'framework',
+    num: 'F02',
+    cn: 'Flask 核心用法',
+    en: 'Flask',
+    summary: '路由与返回值、应用 / 请求上下文、应用工厂与蓝图、Flask-SQLAlchemy、钩子与错误处理、async 视图的真相。',
+    ready: true,
+    sections: [
+      { id: 'basics', num: '01', label: '路由与视图返回值' },
+      { id: 'context', num: '02', label: '应用上下文与请求上下文' },
+      { id: 'factory', num: '03', label: '应用工厂与蓝图' },
+      { id: 'sqlalchemy', num: '04', label: 'Flask-SQLAlchemy' },
+      { id: 'hooks', num: '05', label: '钩子与统一错误' },
+      { id: 'testing-async', num: '06', label: '测试与 async 视图' },
+      { id: 'compare', num: '07', label: '同一接口三种写法' },
+    ],
+  },
+  {
+    slug: 'fastapi',
+    category: 'framework',
+    num: 'F03',
+    cn: 'FastAPI 工程',
+    en: 'FastAPI',
+    summary: '并发模型、Pydantic、依赖注入、中间件与生命周期、流式响应，每节附与 Django / Flask 的对照。',
+    ready: true,
+    sections: [
+      { id: 'concurrency-model', num: '01', label: '并发模型:async vs sync 路由' },
+      { id: 'pydantic', num: '02', label: 'Pydantic 数据校验' },
+      { id: 'di', num: '03', label: '依赖注入' },
+      { id: 'middleware', num: '04', label: '中间件与生命周期' },
+      { id: 'streaming', num: '05', label: '流式响应' },
+      { id: 'compare', num: '06', label: '同一接口三种写法' },
+    ],
+  },
+  {
+    slug: 'libraries',
+    category: 'framework',
+    num: 'F04',
+    cn: '常用第三方库',
+    en: 'Libraries',
+    summary: '数据库选 SQLAlchemy 还是 Peewee，缓存用进程内的 cachetools，还是 Redis / Memcached，以及三个框架各自怎么接。',
+    ready: true,
+    sections: [
+      { id: 'peewee', num: '01', label: 'Peewee 与三种 ORM' },
+      { id: 'memory-cache', num: '02', label: '进程内缓存 cachetools' },
+      { id: 'shared-cache', num: '03', label: 'Redis 与框架缓存' },
+      { id: 'choose', num: '04', label: '怎么选' },
     ],
   },
 
@@ -269,6 +331,24 @@ export const chapters: Chapter[] = [
       { id: 'fanout', num: '13', label: 'Send 与 Store' },
     ],
   },
+  {
+    slug: 'llamaindex',
+    category: 'agent',
+    num: 'A07',
+    cn: 'LlamaIndex 核心用法',
+    en: 'LlamaIndex',
+    summary: '把原文切成节点、建向量索引、按 metadata 过滤，再用 Query Engine 和 Workflow 取出带来源的答案。不调用真实模型。',
+    ready: true,
+    sections: [
+      { id: 'embed', num: '01', label: '用词当向量' },
+      { id: 'split', num: '02', label: '切成节点' },
+      { id: 'index', num: '03', label: '索引与检索' },
+      { id: 'query', num: '04', label: 'Query Engine' },
+      { id: 'filter', num: '05', label: 'Metadata 过滤' },
+      { id: 'pipeline', num: '06', label: '入库流水线' },
+      { id: 'workflow', num: '07', label: 'Workflow 两步' },
+    ],
+  },
 ];
 
 export const readyChapters = chapters.filter((c) => c.ready);
@@ -277,6 +357,7 @@ export const soonChapters = chapters.filter((c) => !c.ready);
 // 按板块派生
 export const algoChapters = chapters.filter((c) => c.category === 'algo');
 export const pythonChapters = chapters.filter((c) => c.category === 'python');
+export const frameworkChapters = chapters.filter((c) => c.category === 'framework');
 export const agentChapters = chapters.filter((c) => c.category === 'agent');
 
 interface CategoryConfig {
@@ -296,9 +377,15 @@ export const categoryConfig: CategoryConfig[] = [
   },
   {
     key: 'python',
-    label: { cn: 'Python', en: 'Python' },
+    label: { cn: 'Python 基础', en: 'Python Basics' },
     routePrefix: '/python',
     chapters: pythonChapters,
+  },
+  {
+    key: 'framework',
+    label: { cn: 'Python 框架', en: 'Python Frameworks' },
+    routePrefix: '/framework',
+    chapters: frameworkChapters,
   },
   {
     key: 'agent',

@@ -26,10 +26,11 @@ import {
   updateState,
 } from '../../data/langgraph-code';
 import { ghBlob } from '../../lib/github';
+import { withBase } from '../../lib/url';
 
 const chapter = chapters.find((item) => item.slug === 'langgraph')!;
 const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
-const a01 = `${import.meta.env.BASE_URL}agent/react-agent-loop`.replace(/\/+/g, '/');
+const a01 = withBase('/agent/react-agent-loop');
 ---
 <BaseLayout title="LangGraph 核心用法 · Agent · 算法、Python 与 Agent 学习手记" active="agent">
   <div class="layout">

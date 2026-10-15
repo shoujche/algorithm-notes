@@ -9,8 +9,10 @@ import CodeBlock from '../../components/CodeBlock.astro';
 import { chapters } from '../../data/topics';
 import { decorators, lruCache, rateLimiter, asyncPool, toolLoop, CODE_DIR } from '../../data/hands-on-code';
 import { ghBlob } from '../../lib/github';
+import { sectionProblemUrl } from '../../lib/leetcode';
 
 const chapter = chapters.find((c) => c.slug === 'hands-on')!;
+const problem = (id: string) => sectionProblemUrl(chapter, id);
 ---
 <BaseLayout title="实战手撕 · Python 面试 · 算法与 Python 面试手记" active="python">
   <div class="layout">
@@ -52,7 +54,7 @@ const chapter = chapters.find((c) => c.slug === 'hands-on')!;
 
       <!-- 02 LRU -->
       <section class="article" id="lru">
-        <div class="art-head"><span class="num">02</span><LcBadge kind="hard" text="困难 · LC 146" /></div>
+        <div class="art-head"><span class="num">02</span><LcBadge kind="hard" text="困难 · LC 146" href={problem('lru')} /></div>
         <h3>手写 LRU 缓存(get / put 均 O(1))</h3>
         <p class="lead">「实现一个 LRU 缓存,支持 <kbd>get</kbd> 和 <kbd>put</kbd>,容量满时淘汰最久未使用的条目。<b>两个操作都要 O(1)</b>。」——LeetCode 146,大厂现场高频。</p>
         <Idea>

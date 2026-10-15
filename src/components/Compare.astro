@@ -1,0 +1,68 @@
+---
+// 三框架对比卡片：Django / Flask / FastAPI 三列 + 「相同点」一行，当前章节的框架高亮。
+// 用具名 slot 承载富文本：django / flask / fastapi / same。
+import type { Framework } from '../data/framework-compare-code';
+
+interface Props {
+  topic: string;
+  /** 当前章节所属框架；不传则三列同等展示 */
+  current?: Framework;
+}
+const { topic, current } = Astro.props;
+const columns: { key: Framework; name: string }[] = [
+  { key: 'django', name: 'Django' },
+  { key: 'flask', name: 'Flask' },
+  { key: 'fastapi', name: 'FastAPI' },
+];
+const hasSame = Astro.slots.has('same');
+---
+<div class="compare">
+  <div class="cmp-head">
+    <span class="cmp-tag">三框架对比</span>
+    <span class="cmp-topic">{topic}</span>
+  </div>
+  <div class="cmp-cols">
+    {columns.map((c) => (
+      <div class={`cmp-col ${c.key === current ? 'cur' : ''}`}>
+        <div class="cmp-name">{c.name}{c.key === current && <span class="here">本章</span>}</div>
+        <div class="cmp-body">
+          {c.key === 'django' && <slot name="django" />}
+          {c.key === 'flask' && <slot name="flask" />}
+          {c.key === 'fastapi' && <slot name="fastapi" />}
+        </div>
+      </div>
+    ))}
+  </div>
+  {hasSame && (
+    <div class="cmp-same"><b>相同</b><span><slot name="same" /></span></div>
+  )}
+</div>
+
+<style>
+  .compare {
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--orange);
+    border-radius: 10px;
+    background: var(--surface);
+    margin: 14px 0;
+    padding: 14px 16px;
+  }
+  .cmp-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .cmp-tag {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    color: var(--orange); background: color-mix(in srgb, var(--orange) 10%, transparent);
+    border-radius: 6px; padding: 3px 8px; letter-spacing: .4px;
+  }
+  .cmp-topic { font-size: 14.5px; color: var(--ink); font-weight: 600; }
+  .cmp-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .cmp-col { border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; background: var(--paper); }
+  .cmp-col.cur { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-wash); }
+  .cmp-name { font-family: var(--font-display); font-weight: 600; font-size: 13.5px; color: var(--graphite); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+  .cmp-col.cur .cmp-name { color: var(--accent-ink); }
+  .here { font-family: var(--font-mono); font-size: 10px; font-weight: 500; color: #fff; background: var(--accent); border-radius: 4px; padding: 1px 5px; }
+  .cmp-body { font-size: 13.5px; line-height: 1.6; color: var(--graphite); }
+  .cmp-body :global(kbd) { font-size: 12px; }
+  .cmp-same { display: flex; gap: 10px; margin-top: 10px; font-size: 13.5px; color: var(--graphite); line-height: 1.6; }
+  .cmp-same b { color: var(--teal); flex: none; }
+  @media (max-width: 760px) { .cmp-cols { grid-template-columns: 1fr; } }
+</style>

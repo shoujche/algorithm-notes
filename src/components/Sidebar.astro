@@ -1,6 +1,7 @@
 ---
 import type { Section } from '../data/topics';
 import { categoryConfig } from '../data/topics';
+import { leetcodeProblemUrl } from '../lib/leetcode';
 import { withBase } from '../lib/url';
 
 interface Props {
@@ -18,10 +19,19 @@ const { chapterCn, chapterEn, currentSlug, sections = [] } = Astro.props;
     <div class="nav-group">
       <span class="eyebrow">{chapterCn} / {chapterEn}</span>
       {sections.map((s, i) => (
-        <a href={`#${s.id}`} class={i === 0 ? 'active' : ''} data-nav={s.id}>
-          <span class="idx">{s.num}</span>{s.label}
-          {s.lc && <span class="lc">{s.lc}</span>}
-        </a>
+        s.lcSlug ? (
+          <div class="sec">
+            <a href={`#${s.id}`} class={i === 0 ? 'active' : ''} data-nav={s.id}>
+              <span class="idx">{s.num}</span>{s.label}
+            </a>
+            <a class="ext" href={leetcodeProblemUrl(s.lcSlug)} target="_blank" rel="noopener noreferrer" title="原题描述">{s.lc}</a>
+          </div>
+        ) : (
+          <a href={`#${s.id}`} class={i === 0 ? 'active' : ''} data-nav={s.id}>
+            <span class="idx">{s.num}</span>{s.label}
+            {s.lc && <span class="lc">{s.lc}</span>}
+          </a>
+        )
       ))}
     </div>
 

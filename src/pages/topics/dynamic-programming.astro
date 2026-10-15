@@ -19,8 +19,10 @@ import {
   CODE_DIR,
 } from '../../data/dynamic-programming-code';
 import { ghBlob } from '../../lib/github';
+import { sectionProblemUrl } from '../../lib/leetcode';
 
 const chapter = chapters.find((c) => c.slug === 'dynamic-programming')!;
+const problem = (id: string) => sectionProblemUrl(chapter, id);
 const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
 ---
 <BaseLayout title="动态规划 Dynamic Programming · 算法与 Python 面试手记" active="algo">
@@ -40,7 +42,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
       </div>
 
       <section class="article" id="climb-stairs">
-        <div class="art-head"><span class="num">01</span><LcBadge kind="easy" text="LeetCode 70 · Easy" /></div>
+        <div class="art-head"><span class="num">01</span><LcBadge kind="easy" text="LeetCode 70 · Easy" href={problem('climb-stairs')} /></div>
         <h3>爬楼梯 Climbing Stairs</h3>
         <p class="lead">每次可以爬 1 阶或 2 阶。要到达第 <kbd>n</kbd> 阶，一共有多少种不同的爬法？</p>
         <h4 class="sub">解题思路 · 到达第 i 阶的方法数</h4>
@@ -72,7 +74,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
       </section>
 
       <section class="article" id="min-cost">
-        <div class="art-head"><span class="num">02</span><LcBadge kind="easy" text="LeetCode 746 · Easy" /></div>
+        <div class="art-head"><span class="num">02</span><LcBadge kind="easy" text="LeetCode 746 · Easy" href={problem('min-cost')} /></div>
         <h3>最小花费爬楼梯 Min Cost Climbing Stairs</h3>
         <p class="lead">数组 <kbd>cost[i]</kbd> 是从第 i 阶向上爬时要付的钱，付完之后可以再爬 1 阶或 2 阶。可以从下标 0 或 1 开始，求到达楼顶的最小花费。</p>
         <h4 class="sub">解题思路 · 到达这一格的更便宜来路</h4>
@@ -103,7 +105,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
       </section>
 
       <section class="article" id="max-subarray">
-        <div class="art-head"><span class="num">03</span><LcBadge kind="easy" text="LeetCode 53 · Easy" /></div>
+        <div class="art-head"><span class="num">03</span><LcBadge kind="easy" text="LeetCode 53 · Easy" href={problem('max-subarray')} /></div>
         <h3>最大子数组和 Maximum Subarray</h3>
         <p class="lead">连续子数组的和最大是多少。这题仍是 Easy，所以放在打家劫舍前面。和前两题不同：答案不一定在最后一格，而在整张表的最大值。</p>
         <h4 class="sub">解题思路 · 以 i 结尾</h4>
@@ -137,7 +139,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
       </section>
 
       <section class="article" id="house-robber">
-        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="LeetCode 198 · Medium" /></div>
+        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="LeetCode 198 · Medium" href={problem('house-robber')} /></div>
         <h3>打家劫舍 House Robber</h3>
         <p class="lead">一排房屋，每间有一定现金。相邻两间不能在同一晚偷。求一夜最多能偷到多少。</p>
         <h4 class="sub">解题思路 · 偷，或者跳过</h4>
@@ -171,7 +173,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
       </section>
 
       <section class="article" id="coin-change">
-        <div class="art-head"><span class="num">05</span><LcBadge kind="mid" text="LeetCode 322 · Medium" /></div>
+        <div class="art-head"><span class="num">05</span><LcBadge kind="mid" text="LeetCode 322 · Medium" href={problem('coin-change')} /></div>
         <h3>零钱兑换 Coin Change</h3>
         <p class="lead">给定硬币面额，凑出金额 <kbd>amount</kbd> 的最少硬币数。凑不出返回 -1。每种面额可以重复用。</p>
         <h4 class="sub">解题思路 · 金额 x 的最后一枚硬币</h4>
@@ -204,7 +206,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
       </section>
 
       <section class="article" id="lis">
-        <div class="art-head"><span class="num">06</span><LcBadge kind="mid" text="LeetCode 300 · Medium" /></div>
+        <div class="art-head"><span class="num">06</span><LcBadge kind="mid" text="LeetCode 300 · Medium" href={problem('lis')} /></div>
         <h3>最长递增子序列 Longest Increasing Subsequence</h3>
         <p class="lead">从左到右选若干个数，保持严格递增，最长能有多长。这里只写 <kbd>O(n²)</kbd> 的表，方便看「以谁结尾」。</p>
         <h4 class="sub">解题思路 · 以 nums[i] 结尾</h4>
@@ -236,7 +238,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
       </section>
 
       <section class="article" id="lcs">
-        <div class="art-head"><span class="num">07</span><LcBadge kind="mid" text="LeetCode 1143 · Medium" /></div>
+        <div class="art-head"><span class="num">07</span><LcBadge kind="mid" text="LeetCode 1143 · Medium" href={problem('lcs')} /></div>
         <h3>最长公共子序列 Longest Common Subsequence</h3>
         <p class="lead">两个字符串里都出现、且相对顺序不变的最长子序列。子序列不必连续。<kbd>abcde</kbd> 和 <kbd>ace</kbd> 的答案是 <kbd>ace</kbd>，长度 3。</p>
         <h4 class="sub">解题思路 · 前 i 个对前 j 个</h4>
@@ -271,7 +273,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
       </section>
 
       <section class="article" id="edit-distance">
-        <div class="art-head"><span class="num">08</span><LcBadge kind="mid" text="LeetCode 72 · Medium" /></div>
+        <div class="art-head"><span class="num">08</span><LcBadge kind="mid" text="LeetCode 72 · Medium" href={problem('edit-distance')} /></div>
         <h3>编辑距离 Edit Distance</h3>
         <p class="lead">把 <kbd>word1</kbd> 变成 <kbd>word2</kbd>，每次可以插入、删除或替换一个字符，最少操作几次。<kbd>horse</kbd> → <kbd>ros</kbd> 是 3 次。</p>
         <h4 class="sub">解题思路 · 三个来路</h4>

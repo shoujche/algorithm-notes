@@ -1,0 +1,223 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import Interview from '../../components/Interview.astro';
+import Complexity from '../../components/Complexity.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import CodeTabs from '../../components/CodeTabs.astro';
+import Compare from '../../components/Compare.astro';
+import { chapters } from '../../data/topics';
+import { appBasics, contexts, factoryBlueprint, sqlalchemyCrud, hooksErrors, testingAsync, CODE_DIR } from '../../data/flask-code';
+import { compareVariants, COMPARE_DIR } from '../../data/framework-compare-code';
+import { ghBlob } from '../../lib/github';
+
+const chapter = chapters.find((c) => c.slug === 'flask')!;
+const fullDoc = ghBlob('docs/python-frameworks/flask.md');
+---
+<BaseLayout title="Flask 核心用法 · Python 框架 · 算法与 Python 面试手记" active="framework">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Python 框架 / {chapter.num} · Flask</span>
+        <h2><em>Flask</em>:核心极简、<br />按需组装的微框架</h2>
+        <p>Flask 核心只管路由、请求 / 响应、模板、会话和配置,数据库、表单、认证都交给扩展。这一章讲清它最独特的<b>上下文机制</b>、应用工厂与蓝图、Flask-SQLAlchemy、钩子顺序,以及 async 视图到底能不能提高吞吐。完整教程、速查表和面试题见 <a href={fullDoc} target="_blank" rel="noopener noreferrer">flask.md ↗</a>。</p>
+        <div class="meta">
+          <div><span class="n">7</span><span class="l">Topics</span></div>
+          <div><span class="n">3.1</span><span class="l">Flask</span></div>
+          <div><span class="n">上下文</span><span class="l">核心</span></div>
+          <div><span class="n">对比</span><span class="l">三框架</span></div>
+        </div>
+      </div>
+
+      <!-- 01 路由 -->
+      <section class="article" id="basics">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="基础 · Routing" /></div>
+        <h3>路由与视图返回值</h3>
+        <p class="lead">Flask 用装饰器把 URL 绑到函数上,<kbd>@app.get</kbd> / <kbd>@app.post</kbd> 是 <kbd>@app.route(methods=[...])</kbd> 的简写。视图的返回值很宽松,框架统一用 <kbd>make_response</kbd> 转成 Response。</p>
+        <Idea>
+          视图可以返回这些东西:
+          <ol class="steps">
+            <li><kbd>str</kbd> → HTML;<kbd>dict</kbd> / <kbd>list</kbd> → 自动 JSON。</li>
+            <li><kbd>(body, status)</kbd> 或 <kbd>(body, status, headers)</kbd> → 指定状态码和响应头。</li>
+            <li>需要细改响应时用 <kbd>make_response()</kbd>;出错用 <kbd>abort(404)</kbd>,它会抛异常中断视图。</li>
+            <li>链接用 <kbd>url_for("端点名")</kbd> 反解;端点名默认是函数名,蓝图里是 <kbd>蓝图名.函数名</kbd>。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={appBasics} lang="python" file="app_basics.py" src={ghBlob(`${CODE_DIR}/app_basics.py`)} />
+        <Compare topic="取查询参数和请求体" current="flask">
+          <Fragment slot="django"><kbd>request.GET.get("q")</kbd>;JSON 要 <kbd>json.loads(request.body)</kbd>。</Fragment>
+          <Fragment slot="flask"><kbd>request.args.get("q", type=int)</kbd>;<kbd>request.get_json(silent=True)</kbd>,校验自己做。</Fragment>
+          <Fragment slot="fastapi">直接写参数 <kbd>q: int = 1</kbd>、<kbd>data: BookIn</kbd>,已校验、已转类型,失败 422。</Fragment>
+          <Fragment slot="same">路径参数都支持类型转换器,<kbd>&lt;int:id&gt;</kbd> / <kbd>{'{id}'}: int</kbd>。</Fragment>
+        </Compare>
+        <Interview q="Flask 返回 dict 和 jsonify 有区别吗?">
+          <p>Flask 1.1 起视图返回 <kbd>dict</kbd> 会自动调用 <kbd>jsonify</kbd>,2.2 起 <kbd>list</kbd> 也可以,所以大多数情况下两者等价。需要 <kbd>jsonify</kbd> 的场景是在错误处理器、钩子等非视图位置构造响应,或者想先拿到 Response 对象再修改。</p>
+        </Interview>
+      </section>
+
+      <!-- 02 上下文 -->
+      <section class="article" id="context">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="hard" text="核心 · Context" /></div>
+        <h3>应用上下文与请求上下文</h3>
+        <p class="lead">Flask 最独特、面试最常问的机制:<kbd>from flask import request</kbd> 当全局变量用,多线程下却不会串数据。原因是 <kbd>request</kbd> 是<b>代理对象</b>,每次访问时去当前上下文里找真正的请求,而上下文基于 <kbd>contextvars</kbd>,每个线程 / 协程各自独立。</p>
+        <Idea>
+          两种上下文,四个代理对象:
+          <ol class="steps">
+            <li><b>应用上下文</b>:<kbd>current_app</kbd>、<kbd>g</kbd>。CLI、后台任务、测试里没有请求,也能用 <kbd>app.app_context()</kbd> 访问配置和扩展。</li>
+            <li><b>请求上下文</b>:<kbd>request</kbd>、<kbd>session</kbd>。出了上下文访问会抛 <kbd>RuntimeError</kbd>。</li>
+            <li><b>g</b> 是本次请求内的临时存储,不是跨请求的全局变量。</li>
+            <li><b>session</b> 默认存在客户端 cookie 里,<b>签名但不加密</b>:脚本直接 base64 解码就读出了 <kbd>{'{"visits":2}'}</kbd>。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={contexts} lang="python" file="contexts.py" src={ghBlob(`${CODE_DIR}/contexts.py`)} />
+        <Complexity items={[
+          { l: '应用上下文', v: 'current_app · g' },
+          { l: '请求上下文', v: 'request · session' },
+          { l: '隔离方式', v: 'contextvars 每线程 / 协程独立' },
+        ]} />
+        <Compare topic="请求级对象怎么拿、怎么共享" current="flask">
+          <Fragment slot="django"><kbd>request</kbd> 显式传参;中间件往 <kbd>request</kbd> 上挂属性(如 <kbd>request.user</kbd>)。</Fragment>
+          <Fragment slot="flask"><kbd>request</kbd> 隐式全局代理;请求内共享数据放 <kbd>g</kbd>。省事,但依赖不可见,请求外要手动推上下文。</Fragment>
+          <Fragment slot="fastapi">依赖注入:<kbd>user: CurrentUser</kbd> 写在签名里,显式、可组合、测试时一行替换。</Fragment>
+        </Compare>
+        <Interview q="Flask 的应用上下文和请求上下文是什么?为什么需要?">
+          <p>请求上下文保存 <kbd>request</kbd> 和 <kbd>session</kbd>,应用上下文保存 <kbd>current_app</kbd> 和 <kbd>g</kbd>。处理请求时 Flask 先推应用上下文、再推请求上下文,结束时依次弹出。需要它们是因为 Flask 允许用全局变量风格访问 <kbd>request</kbd>,而服务器同时处理多个请求,必须保证每个线程 / 协程看到自己的请求,所以用 <kbd>contextvars</kbd> 隔离存储 + 代理对象实现。应用上下文单独存在,是为了在没有请求的场景(CLI、后台任务、测试)也能访问配置和扩展。</p>
+        </Interview>
+        <Interview q="Flask 的 session 安全吗?">
+          <p>默认 session 是签名的 cookie,防篡改但不加密,任何人都能解码看到内容,安全性依赖 <kbd>SECRET_KEY</kbd> 保密。所以不能往里放敏感数据;需要服务端存储时用 Flask-Session 配合 Redis;生产要开 <kbd>SESSION_COOKIE_SECURE</kbd>,<kbd>SECRET_KEY</kbd> 从环境变量注入随机值。</p>
+        </Interview>
+      </section>
+
+      <!-- 03 工厂与蓝图 -->
+      <section class="article" id="factory">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="mid" text="工程 · Factory" /></div>
+        <h3>应用工厂与蓝图</h3>
+        <p class="lead">中大型 Flask 项目的标准骨架:<b>扩展先创建、工厂里再 init_app</b>,<b>路由按功能拆成蓝图</b>,配置用类 + 环境变量覆盖。</p>
+        <Idea>
+          为什么不直接在模块顶层 <kbd>app = Flask(__name__)</kbd>:
+          <ol class="steps">
+            <li><b>测试隔离</b>:每个测试用不同配置 <kbd>create_app(TestConfig)</kbd>,实例互不污染。</li>
+            <li><b>避免循环导入</b>:<kbd>db = SQLAlchemy()</kbd> 放在 <kbd>extensions.py</kbd>,模型和蓝图都只 import 它。</li>
+            <li><b>蓝图</b>不是独立应用,注册后才生效;同一个蓝图可用不同前缀注册多次(需要不同 <kbd>name</kbd>)。</li>
+            <li><kbd>from_prefixed_env()</kbd> 读取 <kbd>FLASK_</kbd> 前缀的环境变量,并按 JSON 解析,<kbd>"50"</kbd> 会变成 <kbd>50</kbd>。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={factoryBlueprint} lang="python" file="factory_blueprint.py" src={ghBlob(`${CODE_DIR}/factory_blueprint.py`)} />
+        <Compare topic="模块化与配置" current="flask">
+          <Fragment slot="django">按 App 拆分(带模型、迁移、Admin);全局 <kbd>settings.py</kbd>,<kbd>DJANGO_SETTINGS_MODULE</kbd> 指定。</Fragment>
+          <Fragment slot="flask"><kbd>Blueprint</kbd> 只是路由分组;<kbd>app.config</kbd> 按实例隔离,<kbd>from_object</kbd> + <kbd>from_prefixed_env</kbd>。</Fragment>
+          <Fragment slot="fastapi"><kbd>APIRouter</kbd> 做路由分组;配置惯例用 pydantic-settings 的 <kbd>BaseSettings</kbd>,带类型校验。</Fragment>
+          <Fragment slot="same"><kbd>Blueprint</kbd> ≈ <kbd>APIRouter</kbd> ≈ <kbd>include()</kbd>;敏感配置都应来自环境变量。</Fragment>
+        </Compare>
+        <Interview q="什么是应用工厂?为什么推荐?">
+          <p>把创建 app 的过程封装成 <kbd>create_app(config)</kbd> 函数。好处有三:测试时可以用不同配置创建隔离的实例;扩展先创建、后 <kbd>init_app</kbd>,蓝图在函数内导入,避免循环导入;同一进程可以创建多个配置不同的 app。</p>
+        </Interview>
+      </section>
+
+      <!-- 04 SQLAlchemy -->
+      <section class="article" id="sqlalchemy">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="数据 · ORM" /></div>
+        <h3>Flask-SQLAlchemy</h3>
+        <p class="lead">Flask 不带 ORM,最常用的是 Flask-SQLAlchemy:把 SQLAlchemy 的 engine 和 session 绑定到应用上下文。3.x 版本配合 SQLAlchemy 2.x,推荐 <kbd>Mapped</kbd> 类型化模型 + <kbd>db.select()</kbd> 查询风格。</p>
+        <Idea>
+          <ol class="steps">
+            <li><kbd>db.session</kbd> 是 scoped session,作用域是应用上下文,请求结束时自动 <kbd>remove()</kbd>;你只负责 <kbd>commit</kbd> / <kbd>rollback</kbd>。</li>
+            <li><kbd>db.get_or_404</kbd>、<kbd>db.paginate</kbd> 是 Flask 专属的便捷方法。旧的 <kbd>Model.query</kbd> 已是 legacy。</li>
+            <li>防 N+1:<kbd>joinedload</kbd>(JOIN,多对一)/ <kbd>selectinload</kbd>(IN,一对多)。脚本实测 3 本书:预加载 1 条 SQL,懒加载 3 条。</li>
+            <li>迁移用 Flask-Migrate:<kbd>flask db migrate</kbd> + <kbd>flask db upgrade</kbd>。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={sqlalchemyCrud} lang="python" file="sqlalchemy_crud.py" src={ghBlob(`${CODE_DIR}/sqlalchemy_crud.py`)} />
+        <Complexity items={[
+          { l: 'joinedload', v: '1 条 SQL' },
+          { l: '懒加载', v: '1 + 作者数' },
+          { l: '扣库存', v: 'UPDATE ... WHERE stock > 0' },
+        ]} />
+        <Compare topic="数据库会话由谁管" current="flask">
+          <Fragment slot="django">ORM 自己管连接,按请求复用(<kbd>CONN_MAX_AGE</kbd>),业务代码看不到 session。</Fragment>
+          <Fragment slot="flask">scoped session 绑在<b>应用上下文</b>上(隐式),<kbd>teardown_appcontext</kbd> 时清理。</Fragment>
+          <Fragment slot="fastapi"><kbd>yield</kbd> 依赖把 session <b>注入</b>到路由参数(显式),请求结束执行清理段。</Fragment>
+          <Fragment slot="same">Flask 和 FastAPI 用的都是 SQLAlchemy,模型和查询代码几乎可以直接复用。</Fragment>
+        </Compare>
+        <Interview q="Flask-SQLAlchemy 的 session 是怎么管理的?">
+          <p>它使用 scoped session,作用域绑定到应用上下文,每个请求拿到独立的 session,在 <kbd>teardown_appcontext</kbd> 时自动移除。开发者只负责 commit / rollback。在后台线程或 Celery 任务里用 <kbd>db</kbd> 时,要先手动 <kbd>with app.app_context():</kbd>。</p>
+        </Interview>
+      </section>
+
+      <!-- 05 钩子 -->
+      <section class="article" id="hooks">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="mid" text="机制 · Hooks" /></div>
+        <h3>钩子与统一错误</h3>
+        <p class="lead">Flask 没有 Django 那种中间件类,对应的是一组请求钩子。脚本实测了它们的执行顺序,以及如何把默认的 HTML 错误页统一换成 JSON。</p>
+        <Idea>
+          <ol class="steps">
+            <li><kbd>before_request</kbd> 按注册顺序执行;返回非 None 就<b>短路</b>,视图不执行,但响应仍会经过 <kbd>after_request</kbd>。</li>
+            <li><kbd>after_request</kbd> <b>逆注册顺序</b>执行,必须返回 response;出现未处理异常时不执行。</li>
+            <li><kbd>teardown_request</kbd> 无论成功失败都执行,收到异常参数,用来释放资源。</li>
+            <li><kbd>errorhandler(HTTPException)</kbd> 把所有 4xx / 5xx 转 JSON;业务异常也能注册处理器,在边界统一转 HTTP 状态码。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={hooksErrors} lang="python" file="hooks_errors.py" src={ghBlob(`${CODE_DIR}/hooks_errors.py`)} />
+        <Complexity items={[
+          { l: '实测顺序', v: 'before-1 → before-2 → view → after-2 → after-1 → teardown' },
+        ]} />
+        <Compare topic="横切逻辑放哪" current="flask">
+          <Fragment slot="django">中间件类包住整条链,另有 <kbd>process_view</kbd> / <kbd>process_exception</kbd> 钩子。</Fragment>
+          <Fragment slot="flask">拆开的「中间件」:前半段 <kbd>before_request</kbd>,后半段 <kbd>after_request</kbd>,收尾 <kbd>teardown</kbd>。</Fragment>
+          <Fragment slot="fastapi"><kbd>@app.middleware("http")</kbd> 包住整条链;按路由的逻辑(鉴权)更适合用依赖。</Fragment>
+          <Fragment slot="same">都是洋葱模型:后进入的先退出;都能用异常处理器把业务异常映射成 HTTP 响应。</Fragment>
+        </Compare>
+        <Interview q="before_request、after_request、teardown_request 的区别?">
+          <p><kbd>before_request</kbd> 在视图前执行,返回非 None 就直接作为响应、跳过视图。<kbd>after_request</kbd> 在得到响应后执行,可以修改响应,必须返回 response,出现未处理异常时不执行。<kbd>teardown_request</kbd> 无论成功失败都会在请求结束时执行,接收异常参数,用于释放资源,不能修改响应。</p>
+        </Interview>
+      </section>
+
+      <!-- 06 测试与 async -->
+      <section class="article" id="testing-async">
+        <div class="art-head"><span class="num">06</span><LcBadge kind="hard" text="误区 · Async" /></div>
+        <h3>测试与 async 视图</h3>
+        <p class="lead">Flask 2.0 起支持 <kbd>async def</kbd> 视图(需 <kbd>flask[async]</kbd>)。但它跑在 WSGI 上,<b>每个请求仍独占一个 worker</b>。脚本起了一个真实的单线程服务器,同时发 3 个请求,实测结果说明了一切。</p>
+        <Idea>
+          <ol class="steps">
+            <li><b>async 视图能做的</b>:在一个请求内部并发多个 IO。<kbd>/fanout</kbd> 里 3 个下游各 0.2s,总共约 0.2s。</li>
+            <li><b>async 视图不能做的</b>:让一个 worker 同时处理多个请求。单线程服务器上 3 个并发请求耗时约 0.6s,换成多线程服务器才降到约 0.2s。</li>
+            <li>测试三件套:<kbd>test_client()</kbd> 调 WSGI 应用、<kbd>test_request_context()</kbd> 测依赖 <kbd>request</kbd> 的函数、<kbd>test_cli_runner()</kbd> 测命令。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={testingAsync} lang="python" file="testing_async.py" src={ghBlob(`${CODE_DIR}/testing_async.py`)} />
+        <Complexity items={[
+          { l: '单个请求内 3 个下游', v: '≈0.20s' },
+          { l: '3 请求 · 单线程 worker', v: '≈0.62s' },
+          { l: '3 请求 · 多线程 worker', v: '≈0.21s' },
+        ]} />
+        <Compare topic="写 async def 能得到什么" current="flask">
+          <Fragment slot="django">ASGI 下视图可异步,ORM 底层仍走线程;WSGI 下没有并发收益。</Fragment>
+          <Fragment slot="flask">只能在<b>请求内部</b>并发;吞吐靠 worker 数 × 线程数,或 gevent。要真异步换 Quart / FastAPI。</Fragment>
+          <Fragment slot="fastapi">单进程事件循环可同时挂起大量等待 IO 的请求,是真正的异步并发;代价是不能有阻塞调用。</Fragment>
+        </Compare>
+        <Interview q="Flask 支持 async 吗?和 FastAPI 的 async 有什么不同?">
+          <p>Flask 2.0 起支持 <kbd>async def</kbd> 视图,但它运行在 WSGI 上,每个请求依然占用一个 worker,async 只能让单个请求内部并发多个 IO(比如同时调三个下游服务),不能提高服务器同时处理的请求数。FastAPI 基于 ASGI,单个事件循环可以同时挂起大量等待 IO 的请求,是真正的异步并发。提高 Flask 并发的常规办法是 gunicorn 多进程 + 多线程,或 gevent 协程 worker。</p>
+        </Interview>
+      </section>
+
+      <!-- 07 三框架对照 -->
+      <section class="article" id="compare">
+        <div class="art-head"><span class="num">07</span><LcBadge kind="base" text="对照 · Side by side" /></div>
+        <h3>同一接口三种写法</h3>
+        <p class="lead">同一个书店 API:创建(带校验)、查询(不存在返回 404)、购买(库存为 0 返回 409)。注意 Flask 版的校验是手写的,而且要自己注册错误处理器才能让 404 / 409 返回 JSON。</p>
+        <CodeTabs variants={compareVariants('flask')} dir={COMPARE_DIR} />
+        <Complexity items={[
+          { l: '校验失败', v: 'Flask 400 · Django 400 · FastAPI 422' },
+          { l: 'request', v: '隐式全局 · 显式参数 · 类型声明' },
+          { l: '错误格式', v: '需注册 handler · 视图里返回 · 默认 JSON' },
+        ]} />
+        <Interview q="Flask 和 FastAPI 怎么选?">
+          <p>两者写法很像。FastAPI 内置类型校验、自动 OpenAPI 文档、依赖注入和原生异步,适合新的 API 项目和高并发 IO / 流式场景。Flask 生态更久、同步库兼容性好、服务端模板渲染成熟,适合传统 Web 应用,以及已有 Flask 代码库的维护和扩展。</p>
+        </Interview>
+      </section>
+    </main>
+  </div>
+</BaseLayout>

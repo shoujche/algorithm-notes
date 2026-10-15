@@ -14,9 +14,11 @@ import {
   timeDecay,
 } from '../../data/rag-interview-code';
 import { ghBlob } from '../../lib/github';
+import { withBase } from '../../lib/url';
 
 const chapter = chapters.find((item) => item.slug === 'rag-interview')!;
 const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
+const a07 = withBase('/agent/llamaindex');
 ---
 <BaseLayout title="RAG 面试真题 · Agent · 算法、Python 与 Agent 学习手记" active="agent">
   <div class="layout">
@@ -25,7 +27,7 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
       <div class="hero">
         <span class="eyebrow">Agent / {chapter.num} · RAG 面试真题</span>
         <h2>开发岗怎么讲 <em>RAG</em>：<br />流水线、取舍、能上线</h2>
-        <p>22 道题来自 AgentGuide。答案按理论基础篇同款结构：先考点，再分段展开，能对比就列表，最后加分追问。只保留开发岗口径——怎么建索引、怎么混合检索、怎么控延迟和权限，不讲算法岗的公式推导和训练细节。</p>
+        <p>22 道题来自 AgentGuide。答案按理论基础篇同款结构：先考点，再分段展开，能对比就列表，最后加分追问。只保留开发岗口径——怎么建索引、怎么混合检索、怎么控延迟和权限，不讲算法岗的公式推导和训练细节。库怎么把切块、索引和查询跑起来，见 <a class="chapter-link" href={a07}>A07 LlamaIndex</a>。</p>
         <div class="meta">
           <div><span class="n">22</span><span class="l">Questions</span></div>
           <div><span class="n">开发岗</span><span class="l">Focus</span></div>
@@ -259,11 +261,11 @@ const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
           <p class="exam"><b>开发岗考点：</b>模型只提案，宿主才执行；MCP 是工具接入协议，不是另一种模型 API。</p>
           <p><b>Function Calling：</b>你提供 JSON Schema，模型返回工具名和参数；你的服务校验、鉴权、执行，再把结果塞回对话。生成参数 ≠ 已执行。</p>
           <p><b>MCP：</b>标准化 tools / resources / prompts 的发现与调用，stdio 或 HTTP 传输。一个 MCP Server 可以被多个客户端复用。Function Calling 描述「这一轮怎么说」，MCP 描述「工具怎么连」。</p>
-          <p>必做：schema 校验、最小权限、超时限流、输出截断、审计。写文件、发消息、付款走审批。可运行实现见 <a class="chapter-link" href={`${import.meta.env.BASE_URL}agent/react-agent-loop`.replace(/\/+/g, '/')}>A01 · ReAct Agent 循环</a>。</p>
+          <p>必做：schema 校验、最小权限、超时限流、输出截断、审计。写文件、发消息、付款走审批。可运行实现见 <a class="chapter-link" href={withBase('/agent/react-agent-loop')}>A01 · ReAct Agent 循环</a>。</p>
         </RagQuestion>
       </section>
 
-      <p class="source-note">题目来源：<a href="https://github.com/adongwanai/AgentGuide/blob/main/docs/04-interview/02-rag-questions.md" target="_blank" rel="noopener noreferrer">AgentGuide · RAG 系统篇 ↗</a>。理论概念见 <a class="chapter-link" href={`${import.meta.env.BASE_URL}agent/agent-theory`.replace(/\/+/g, '/')}>A02 · Agent 理论基础</a>。</p>
+      <p class="source-note">题目来源：<a href="https://github.com/adongwanai/AgentGuide/blob/main/docs/04-interview/02-rag-questions.md" target="_blank" rel="noopener noreferrer">AgentGuide · RAG 系统篇 ↗</a>。理论概念见 <a class="chapter-link" href={withBase('/agent/agent-theory')}>A02 · Agent 理论基础</a>。</p>
     </main>
   </div>
 </BaseLayout>

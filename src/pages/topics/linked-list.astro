@@ -19,8 +19,10 @@ import {
   CODE_DIR,
 } from '../../data/linked-list-code';
 import { ghBlob } from '../../lib/github';
+import { sectionProblemUrl } from '../../lib/leetcode';
 
 const chapter = chapters.find((c) => c.slug === 'linked-list')!;
+const problem = (id: string) => sectionProblemUrl(chapter, id);
 ---
 <BaseLayout title="链表 Linked List · 算法与 Python 面试手记" active="algo">
   <div class="layout">
@@ -72,7 +74,7 @@ const chapter = chapters.find((c) => c.slug === 'linked-list')!;
 
       <!-- 03 链表反转 -->
       <section class="article" id="reverse">
-        <div class="art-head"><span class="num">03</span><LcBadge kind="easy" text="LeetCode 206 · Easy" /></div>
+        <div class="art-head"><span class="num">03</span><LcBadge kind="easy" text="LeetCode 206 · Easy" href={problem('reverse')} /></div>
         <h3>反转链表 Reverse Linked List</h3>
         <p class="lead">给你单链表的头节点 <kbd>head</kbd>，请反转链表，并返回反转后的头节点。</p>
         <h4 class="sub">解题思路 · 双指针迭代</h4>
@@ -96,7 +98,7 @@ const chapter = chapters.find((c) => c.slug === 'linked-list')!;
 
       <!-- 04 LRU -->
       <section class="article" id="lru">
-        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="LeetCode 146 · Medium" /></div>
+        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="LeetCode 146 · Medium" href={problem('lru')} /></div>
         <h3>LRU 缓存 LRU Cache</h3>
         <p class="lead">设计满足 LRU（最近最少使用）约束的缓存，<kbd>get</kbd> 与 <kbd>put</kbd> 都要 O(1)。容量满了就淘汰「最久没被用到」的那个。</p>
         <h4 class="sub">解题思路 · 哈希表 + 双向链表</h4>
