@@ -1,0 +1,70 @@
+---
+// 记忆评测：多次会话写入事实，评测时按能力出题
+const TEAL = '#2F9E7E';
+const COBALT = '#3F5BD6';
+const ORANGE = '#E8663D';
+const RED = '#D14343';
+const day = (d: number) => 70 + d * 16;
+const sessions = [
+  { d: 1, t: '住上海 · 养猫', hot: false },
+  { d: 10, t: '入职 A 公司', hot: false },
+  { d: 30, t: '搬到杭州', hot: true },
+  { d: 40, t: '跳槽到 B 公司', hot: true },
+];
+const probes = [
+  { kind: '信息抽取', q: '我养什么宠物？', a: '猫', naive: true, links: [1] },
+  { kind: '跨会话汇总', q: '我住过几个城市？', a: '2', naive: true, links: [1, 30] },
+  { kind: '知识更新', q: '我现在住哪？', a: '杭州', naive: false, links: [30] },
+  { kind: '时间推理', q: '第 20 天我住哪？', a: '上海', naive: true, links: [20] },
+  { kind: '拒答', q: '我开什么车？', a: '不知道', naive: false, links: [] },
+];
+---
+<div class="stage"><div class="grid"><div class="svg-wrap">
+  <svg class="arch" width="920" height="330" viewBox="0 0 920 330" role="img" aria-label="记忆评测时间线">
+    <defs>
+      <marker id="me-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="#9AA0B4" />
+      </marker>
+    </defs>
+
+    <text class="band-lbl" x="40" y="28">会话写入 · SESSIONS</text>
+    <line class="flow" x1="40" y1="120" x2="878" y2="120" marker-end="url(#me-flow)" />
+
+    {sessions.map((s) => (
+      <>
+        <text class="lbl" x={day(s.d)} y="76" text-anchor="middle" fill="#8A8E99">第 {s.d} 天</text>
+        <text class="c" x={day(s.d)} y="96" text-anchor="middle">{s.t}</text>
+        <circle cx={day(s.d)} cy="120" r="7" fill={s.hot ? ORANGE : COBALT} />
+      </>
+    ))}
+
+    <line class="rel" stroke={ORANGE} x1={day(20)} y1="104" x2={day(20)} y2="136" />
+    <text class="lbl" x={day(20)} y="96" text-anchor="middle" fill={ORANGE}>第 20 天</text>
+
+    <path d={`M ${day(48)} 112 L ${day(48) + 8} 120 L ${day(48)} 128 L ${day(48) - 8} 120 z`} fill={ORANGE} />
+    <text class="lbl" x={day(48)} y="96" text-anchor="middle" fill={ORANGE}>评测时提问</text>
+
+    {probes.map((p, i) => {
+      const x = 40 + i * 170;
+      const cx = x + 78;
+      return (
+        <>
+          {p.links.map((d) => (
+            <line class="rel" stroke="#B4B9CC" x1={cx} y1="196" x2={day(d)} y2="128" />
+          ))}
+          <rect class="box" x={x} y="196" width="156" height="104" rx="10" />
+          <rect x={x} y="196" width="156" height="4" rx="2" fill={p.links.length ? TEAL : ORANGE} />
+          <text class="lbl" x={x + 14} y="220" fill={p.links.length ? TEAL : ORANGE}>{p.kind}</text>
+          <text class="t" x={x + 14} y="244">{p.q}</text>
+          <text class="c" x={x + 14} y="264">期望：{p.a}</text>
+          <text class="s" x={x + 14} y="286">
+            朴素 <tspan fill={p.naive ? TEAL : RED} font-weight="700">{p.naive ? '✓' : '✗'}</tspan>
+            {'  ·  '}版本化 <tspan fill={TEAL} font-weight="700">✓</tspan>
+          </text>
+        </>
+      );
+    })}
+  </svg>
+</div></div>
+  <div class="panel caption">橙色节点是覆盖旧值的事实。「朴素」指只做相似度检索、总会返回一条的记忆；它在知识更新和拒答上失分，时间推理碰巧答对，因为它总拿最早那条。所以更新和时间两类题要一起出，单看一类会被运气骗。</div>
+</div>

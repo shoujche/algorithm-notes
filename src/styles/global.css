@@ -158,6 +158,24 @@ svg{display:block;margin:0 auto}
 .edge.rev{stroke:var(--orange);stroke-width:2.4}
 .ptr-badge{font-family:var(--font-mono);font-weight:700;font-size:11.5px}
 
+/* ---------- Architecture diagrams ---------- */
+.svg-wrap svg.arch{width:100%;height:auto;min-width:680px}
+.arch text{font-family:var(--font-display)}
+.arch .band{fill:#F6F7FB;stroke:var(--line);stroke-width:1}
+.arch .band-lbl{font-family:var(--font-mono);font-size:10.5px;font-weight:600;letter-spacing:.6px;fill:var(--muted)}
+.arch .box{fill:#fff;stroke:var(--line-strong);stroke-width:1.2}
+.arch .box.ref{fill:#F7F8FC;stroke-dasharray:4 3}
+.arch .box.hot{fill:#FFF6F2;stroke:var(--orange)}
+.arch .t{font-size:13.5px;font-weight:600;fill:var(--ink)}
+.arch .s{font-size:11px;fill:var(--muted)}
+.arch .chip{fill:#F4F6FD;stroke:#DCE1F5;stroke-width:1}
+.arch .c{font-size:11.5px;fill:var(--graphite)}
+.arch .flow{stroke:#9AA0B4;stroke-width:1.6;fill:none}
+.arch .rel{stroke-width:1.5;fill:none;stroke-dasharray:5 4}
+.arch .lbl{font-family:var(--font-mono);font-size:10.5px;font-weight:600}
+.arch .lbl-bg{fill:#FDFDFB}
+.stage .caption{font-size:13.5px;color:var(--graphite);line-height:1.7}
+
 .stage .panel{padding:16px 18px;border-top:1px solid var(--line);background:var(--surface)}
 .state-vars{display:flex;gap:10px;flex-wrap:wrap;font-family:var(--font-mono);font-size:12.5px}
 .state-vars span{padding:5px 12px;border-radius:8px;border:1px solid var(--line-strong);background:#fff;color:var(--graphite)}

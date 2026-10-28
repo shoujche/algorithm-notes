@@ -1,0 +1,320 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Interview from '../../components/Interview.astro';
+import EvalHarnessDiagram from '../../components/EvalHarnessDiagram.astro';
+import RagEvalDiagram from '../../components/RagEvalDiagram.astro';
+import MemoryEvalDiagram from '../../components/MemoryEvalDiagram.astro';
+import EvalLoopDiagram from '../../components/EvalLoopDiagram.astro';
+import { chapters } from '../../data/topics';
+import {
+  CODE_DIR,
+  deepevalTest,
+  evalHarness,
+  inspectTask,
+  judgeCalibration,
+  langsmithExperiment,
+  memoryProbe,
+  onlineEval,
+  promptfooConfig,
+  ragJudge,
+  ragasMetrics,
+  retrievalMetrics,
+  statsGate,
+  trajectoryMatch,
+} from '../../data/agent-eval-code';
+import { ghBlob } from '../../lib/github';
+import { withBase } from '../../lib/url';
+
+const chapter = chapters.find((item) => item.slug === 'agent-eval')!;
+const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
+const a01 = withBase('/agent/react-agent-loop');
+const a03 = withBase('/agent/rag-interview');
+const a08 = withBase('/agent/deepagents');
+---
+<BaseLayout title="Agent 评测与 Benchmark · Agent · 算法、Python 与 Agent 学习手记" active="agent">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Agent / {chapter.num} · Evaluation</span>
+        <h2>先把「好不好」变成<em>可重复的数字</em></h2>
+        <p>Agent 的输出每次都可能不一样，一条链路里又有检索、记忆、工具和多轮决策。凭感觉改 prompt、换模型，很快就分不清是变好还是变差。这一章先搭一个最小 harness，再按 RAG 检索、RAG 生成、记忆、工具轨迹逐层讲指标的定义，并给出手写实现。然后处理两个常被跳过的问题：LLM 裁判可不可信，分数差几个点算不算数。最后对照公开 benchmark、主流评测框架和线上评估。</p>
+        <p>指标脚本只用标准库，在 <kbd>src/code/agent/agent-eval</kbd> 下直接用 Python 3.10 以上运行，断言写在文件末尾；<kbd>online_eval.py</kbd> 另需安装 <kbd>opentelemetry-sdk</kbd>。框架示例按 2026 年 10 月的版本核对过 API（RAGAS 0.4.3、DeepEval 4.3.2、Inspect AI 0.3.285、LangSmith 0.14.14），运行时会调用模型，密钥一律从环境变量读取。工具调用循环见 <a class="chapter-link" href={a01}>A01</a>，RAG 面试里的评估问答见 <a class="chapter-link" href={a03}>A03</a>。</p>
+        <div class="meta">
+          <div><span class="n">12</span><span class="l">Topics</span></div>
+          <div><span class="n">4 张</span><span class="l">架构图</span></div>
+          <div><span class="n">8 个脚本</span><span class="l">本地可跑</span></div>
+          <div><span class="n">10 个</span><span class="l">工具与框架</span></div>
+        </div>
+      </div>
+
+      <section class="article" id="layers">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="基础 · 分层" /></div>
+        <h3>评测分三层：组件、轨迹、端到端</h3>
+        <p class="lead">先确定评什么。一个 Agent 至少可以在三层打分。组件层看单个部件：检索器有没有把相关文档排进前几名，记忆有没有记住更新，某一步工具调用的参数对不对。轨迹层看过程：走了哪些步骤、调了哪些工具、顺序是否合理、花了多少 token 和时间。端到端层只看结果：任务完成没有，最终答案对不对，数据库最后的状态是不是期望的那样。</p>
+        <p class="lead">三层各有用处。端到端分数最接近用户感受，可它掉了以后，你不知道是哪一环出的问题。组件分数定位快，但组件都及格时整条链路仍可能失败，例如检索对了，模型却没用上下文。实践中，端到端指标做发布门槛，组件和轨迹指标做诊断。</p>
+        <p class="lead">再确定在哪评。离线评测在固定的评测集上跑，用来比较两个版本；线上评估在真实流量上跑，用来发现评测集没覆盖的问题。两边用同一套评估器代码，区别只在输入从哪来。第 12 节会把两边接成一个环。</p>
+        <p class="lead">harness 是把这些串起来的那层代码。下图从左到右：评测集冻结成一个版本；Runner 对每道题跑 k 次，固定温度和随机种子，控制并发；被测 Agent 的 prompt、模型、索引和代码绑定为同一个版本；每次运行留下完整轨迹；评估器读轨迹和标注打分；报告按指标和分组汇总，并和基线比较；门槛决定这次改动能不能合并。</p>
+        <EvalHarnessDiagram />
+        <p class="lead">两件事最容易漏。第一，工具要用 mock 或沙盒，并且每道题重置。真实工具有副作用，订票、发邮件都不能在评测里真的发生；共享状态还会让前一题影响后一题。第二，存完整轨迹，而不只是分数。分数掉了以后，要能打开具体某一题，看它在哪一步走偏。</p>
+        <p class="lead">下面的 harness 把这几层写成最小形态。<kbd>run_agent</kbd> 是查表函数，换成真实 Agent 时只改这一处。评估器的签名统一为 <kbd>(Case, Trace) → float</kbd>，所以精确匹配、工具检查、LLM 裁判都能挂上去。按标签分组很关键：总分 0.75 看不出问题，分组后能看到 policy 类只有 0.667。失败的那题是「退货要付运费吗」，Agent 把包邮政策当成了退货运费的答案。门槛函数拿基线比较，正确率从 0.80 掉到 0.75，超过允许的 2 个点，于是拦下。</p>
+        <CodeBlock code={evalHarness} lang="python" file="eval_harness.py" src={src('eval_harness.py')} />
+        <Interview q="为什么不能只看一个总分？">
+          <p>总分把不同题型平均在一起。拒答题的比例变了、简单题变多了，都会让总分上升，而真实能力没变。要按题型、难度、语言、是否需要工具分组看，每组再看置信区间。总分可以做门槛，关键分组最好另设底线，例如越权类必须 100% 通过。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="dataset">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="base" text="基础 · 评测集" /></div>
+        <h3>评测集：小而准，先于指标</h3>
+        <p class="lead">评测集比指标更决定评测质量。题目不代表真实使用，指标算得再精细也没有意义。起步时，50 到 200 道人工确认过的题就能用，比 5000 道自动生成、没人看过的题更有价值。</p>
+        <p class="lead">来源一般有四种。第一是真实日志：从线上请求里抽样，脱敏后人工写参考答案，这最接近真实分布。第二是专家手写：覆盖产品规则里的关键路径和边界。第三是合成：让模型从文档生成问答，RAGAS 和 DeepEval 都带生成器，量大，但必须抽检。常见问题是问题措辞太像原文、答案太容易找。第四是线上失败回流：差评、报错、低分的轨迹，确认之后加进来，这部分构成回归集。</p>
+        <p class="lead">每道题至少要有输入、参考答案或评分 rubric、标签。RAG 题再加相关文档 id；工具题加期望的工具调用或期望终态；多轮题加完整的对话历史。拒答题、越权题、对抗题单独成类，比例按风险定，而不是按线上出现频率定，因为它们罕见，但一旦出错代价大。</p>
+        <p class="lead">评测集要冻结并带版本号。改一道题就是一个新版本，否则两次结果不可比。公开 benchmark 有污染问题：题目可能已经进了模型的训练数据，分数虚高。自己的评测集也会被「污染」：反复对着同一批题调 prompt，prompt 会过拟合这批题。做法是另留一份不参与调试的 holdout 集，只在发版前跑。</p>
+        <p class="lead">图里的数据卡记下来源、标注规则、标注人和已知偏差。半年后有人问「这个指标为什么掉了」，第一步就是看评测集有没有变。</p>
+        <table class="cmp">
+          <thead>
+            <tr><th>题型</th><th>需要的标注</th><th>典型评估器</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>事实问答</td><td>参考答案、相关文档 id</td><td>精确匹配，或裁判判正确性</td></tr>
+            <tr><td>拒答</td><td>标记为不可回答</td><td>是否拒答</td></tr>
+            <tr><td>越权与安全</td><td>期望的拒绝行为</td><td>规则加裁判，要求全过</td></tr>
+            <tr><td>工具任务</td><td>期望工具调用，或期望终态</td><td>轨迹匹配、状态比对</td></tr>
+            <tr><td>多轮与记忆</td><td>对话历史加探针问题</td><td>按能力分类计分</td></tr>
+            <tr><td>开放生成</td><td>rubric</td><td>裁判打分加人工抽检</td></tr>
+          </tbody>
+        </table>
+        <Interview q="合成数据能直接当评测集吗？">
+          <p>能当起点，不能直接当门槛。合成题倾向于从单段原文出题，检索太容易；问题和原文用词相近，向量检索占便宜。用法是先生成，再人工筛掉答案错误或过于简单的，然后按真实日志的题型比例重新抽样。合成题和真实题分开报分。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="retrieval">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="mid" text="RAG · 检索" /></div>
+        <h3>检索指标：相关文档有没有排在前面</h3>
+        <p class="lead">RAG 要把检索和生成分开评。答案错了，可能是该找的文档没找到，也可能是找到了，模型没用好。下图上方三条关系需要人工标注；下方三条只用问题、上下文和答案，TruLens 把它们叫作 RAG triad。这一节讲上方的检索指标，下一节讲生成指标。</p>
+        <RagEvalDiagram />
+        <p class="lead">检索指标都基于一份标注：每个问题有哪些相关文档。Recall@k 是前 k 条覆盖了多少相关文档，分母是相关文档总数，回答「该找的找全没有」。RAG 里最看重它，因为没进上下文的内容，模型一定用不上。Precision@k 是前 k 条里有多少相关，分母是 k，回答「上下文里噪声多不多」。噪声多会挤占窗口，也会干扰生成。</p>
+        <p class="lead">Hit Rate@k 只问前 k 条里有没有至少一条相关，适合只有一个正确文档的问答。MRR 是第一个相关文档排名的倒数，再对所有问题取平均：排第 1 得 1，排第 2 得 0.5，没找到得 0。它关心第一个正确结果出现得多早。</p>
+        <p class="lead">nDCG 处理分级相关：有的文档高度相关（增益 3），有的只是沾边（增益 1）。每个位置的增益除以 log2(排名 + 1) 再求和，得到 DCG；再除以理想排序下的 DCG，归一化到 0 到 1。示例里高度相关的 d1 排在第 2，沾边的 d2 排在第 4，nDCG@5 是 0.640。把 d1 提到第 1，分数会明显上升。</p>
+        <p class="lead">切块检索有个细节：检索返回的是 chunk，标注通常是文档。同一篇文档的两块都进了前 k，不能算命中两次。代码先用 <kbd>to_doc_ids</kbd> 把 chunk 折回文档并去重，再计算。另一个细节是 k 要和线上一致：线上只放 5 条进上下文，就看 @5，看 @20 没有意义。</p>
+        <CodeBlock code={retrievalMetrics} lang="python" file="retrieval_metrics.py" src={src('retrieval_metrics.py')} />
+        <p class="cue"><span class="t">记忆提示</span>Recall 看找全，Precision 看噪声，MRR 看第一个对的多早出现，nDCG 再区分相关程度。</p>
+        <Interview q="检索指标很好，答案还是错，先查哪？">
+          <p>先看忠实度和上下文利用。常见原因有三个：相关块进了上下文，却排在中间，长上下文里模型容易忽略中段；块切得太碎，关键条件落在相邻的块里；prompt 没要求只根据上下文回答。可以做一个对照：把标注的黄金文档直接放进上下文（oracle context）。答案仍然错，问题在生成；答案变对了，问题在检索和排序。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="generation">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="RAG · 生成" /></div>
+        <h3>生成指标：拆成陈述，逐条核对</h3>
+        <p class="lead">生成阶段最重要的是忠实度（faithfulness，TruLens 叫 groundedness）：答案里的每句话，能否由检索到的上下文推出。RAGAS 分两步：先让模型把答案拆成原子陈述，再逐条判断上下文是否支持，最后取支持的比例。示例答案前半句来自政策，后半句「运费由平台补贴」上下文里没有，所以忠实度是 0.5。忠实度低就是幻觉，和答案是否正确无关：模型凭常识答对了，忠实度仍然低，因为在 RAG 系统里这种答案无法追溯。</p>
+        <p class="lead">Context Precision 看上下文的排序：逐个位置判断这一块对回答有没有用，在有用的位置上算一次 precision@k，再取平均。有用的块越靠前，分数越高。示例的第一块是包邮政策，没用，后两块有用，得分 0.583；把有用的两块提到前面就是 1.0。</p>
+        <p class="lead">Context Recall 以参考答案为准：把参考答案拆成陈述，看每条能否在上下文里找到依据。它只要参考答案，不要文档级标注，所以手里没有相关文档 id 时，可以替代 Recall@k。</p>
+        <p class="lead">Answer Relevance（切题）看答案有没有回答这个问题。RAGAS 从答案反向生成几个问题，计算它们和原问题的嵌入相似度；答非所问或者夹带大量无关内容时，分数就低。它只判断切题，不判断对错。判断对错的是 Answer Correctness：直接和参考答案比，通常是陈述级的 F1，再加上语义相似度。</p>
+        <p class="lead">这些指标都依赖裁判。代码里 <kbd>Judge</kbd> 是一个 Protocol。<kbd>OverlapJudge</kbd> 用字符二元组的重合度，离线可跑，只用来演示算法流程；<kbd>LLMJudge</kbd> 是真实用法，提示词要求「只根据上下文判断，没提到也算 no」，温度设为 0。客户端由调用方创建，<kbd>OpenAI()</kbd> 会从 <kbd>OPENAI_API_KEY</kbd> 环境变量读取密钥。裁判本身也要评测，见第 07 节。</p>
+        <CodeBlock code={ragJudge} lang="python" file="rag_judge.py" src={src('rag_judge.py')} />
+        <table class="cmp">
+          <thead>
+            <tr><th>指标</th><th>比较的两端</th><th>要不要标注</th><th>低分说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Faithfulness</td><td>答案 ↔ 上下文</td><td>不要</td><td>模型编了上下文之外的内容</td></tr>
+            <tr><td>Answer Relevance</td><td>答案 ↔ 问题</td><td>不要</td><td>答非所问，或夹带无关内容</td></tr>
+            <tr><td>Context Precision</td><td>上下文 ↔ 问题或参考答案</td><td>有两个版本</td><td>检索噪声多，排序差</td></tr>
+            <tr><td>Context Recall</td><td>参考答案 ↔ 上下文</td><td>要参考答案</td><td>该找的没找到</td></tr>
+            <tr><td>Answer Correctness</td><td>答案 ↔ 参考答案</td><td>要参考答案</td><td>结论错</td></tr>
+          </tbody>
+        </table>
+        <Interview q="忠实度和正确性冲突时听谁的？">
+          <p>看产品要求。客服、法务、医疗这类必须可追溯的场景，忠实度优先：答案对了，但上下文不支持，说明系统在靠模型记忆作答，知识一过期就会出错。两者组合起来看最有信息量：忠实度高、正确性低，多半是检索到了过期或错误的文档；忠实度低、正确性高，是模型绕过了上下文。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="memory">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="mid" text="记忆 · 探针" /></div>
+        <h3>记忆评测：按能力出题，分类计分</h3>
+        <p class="lead">有记忆的 Agent 要跨会话记住用户信息。评测它不能只问「记不记得」，要拆成几种能力分别出题。LongMemEval（2024）把长期记忆归成五类：信息抽取、跨会话推理、时间推理、知识更新、拒答。LoCoMo 用几十个会话、几百轮的长对话出题，题型分单跳、多跳、时间、开放域和对抗。</p>
+        <p class="lead">信息抽取最简单，问某次会话里提过的事实。跨会话汇总要把多个会话的信息合起来，例如「住过几个城市」。知识更新问被覆盖过的事实：先说住上海，后来说搬到杭州，问现在住哪，期望答杭州。时间推理问某个时间点的状态，「第 20 天住哪」应该答上海。拒答问从没提过的事，应该回答不知道。</p>
+        <MemoryEvalDiagram />
+        <p class="lead">两套实现跑同一份题。朴素记忆模拟只做相似度检索的向量库：总会返回最相似的一条，不看时间。结果知识更新答成了上海，拒答也失败了，因为检索永远能找出「最像」的一条。时间推理反而答对了，因为它碰巧总是拿最早那条。这正是出题时要注意的：单独一类题可能被巧合骗过，更新题和时间题要成对出现。</p>
+        <p class="lead">版本化记忆给每个槽位存带日期的版本，读取时按 <kbd>as_of</kbd> 取不晚于那天的最新一条，没有记录就返回空，五类全对。真实系统里的记忆是模型抽取出的自由文本，比较答案要靠裁判，或者先标准化再匹配，但分类计分的结构不变。</p>
+        <p class="lead">除了答对率，还要看成本：写入时抽取了多少条记忆，有没有把一次性的闲聊也存进去；读取时召回了多少 token 进上下文。另外要测隔离：用户 A 的记忆不能出现在用户 B 的回答里，这类题按越权题处理，要求 100% 通过。Deep Agents 里按用户分 namespace 的做法见 <a class="chapter-link" href={a08}>A08</a>。</p>
+        <CodeBlock code={memoryProbe} lang="python" file="memory_probe.py" src={src('memory_probe.py')} />
+        <Interview q="怎么评测记忆的「遗忘」？">
+          <p>遗忘分两种。一种是应该遗忘：用户要求删除，或者信息过期，之后再问应该拒答，按拒答题评。另一种是不该忘却丢了：上下文被摘要压缩后细节丢失，按信息抽取题评，并把同一类题放在不同的会话距离上（1 个会话前、10 个会话前），画出准确率随距离下降的曲线。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="tools">
+        <div class="art-head"><span class="num">06</span><LcBadge kind="mid" text="工具 · 轨迹" /></div>
+        <h3>工具与轨迹：选对工具、填对参数、走对路线</h3>
+        <p class="lead">Agent 的大部分失败发生在过程里：调错工具、参数填错、陷入循环、该问用户时自己猜。只看最终答案，会漏掉「答案碰巧对了，过程有问题」的情况，例如多调了一次退款接口。</p>
+        <p class="lead">第一层是工具选择：把期望调用的工具和实际调用的工具按名字比，算 precision 和 recall。示例多调了一次 <kbd>get_user</kbd>，precision 是 0.667，recall 是 1.0。第二层是参数：名字对了，参数要逐个比。<kbd>request_id</kbd>、时间戳这类每次都会变的字段要排除在比较之外，代码里用 <kbd>ignore</kbd> 参数处理；字符串参数通常先做规范化，比如大小写、空格、日期格式。BFCL 把调用解析成 AST 再逐个比参数，也可以直接执行调用，比较返回结果。</p>
+        <p class="lead">第三层是整条轨迹。按严格程度有五种匹配：<kbd>strict</kbd> 要求顺序和内容完全一致；<kbd>in_order</kbd> 要求期望步骤按顺序出现，中间允许插入别的调用；<kbd>unordered</kbd> 要求集合相同，不管顺序；<kbd>superset</kbd> 允许多调，期望的都要出现；<kbd>subset</kbd> 允许少调，但不能调期望之外的。示例先查了用户信息再搜索、预订，<kbd>strict</kbd> 失败，<kbd>in_order</kbd> 和 <kbd>superset</kbd> 通过。选哪种取决于业务：有依赖的步骤（先搜索后预订）用 <kbd>in_order</kbd>；只读查询可以用 <kbd>superset</kbd>；涉及资金或删除的操作，另加一条规则，期望之外的写操作一律判失败。</p>
+        <p class="lead">轨迹匹配要求提前知道正确路线，但很多任务有多条正确路线。这时比终态更可靠：τ-bench 不比轨迹，任务结束后检查数据库状态是否和期望一致；SWE-bench 跑仓库测试；WebArena 检查网站状态。终态比对，再加几条过程规则（禁止的操作、步数上限），通常比完整的轨迹匹配更稳。</p>
+        <p class="lead">最后是稳定性。同一道题跑 n 次、成功 c 次。pass@k 是「试 k 次至少成功一次」的概率，无偏估计是 1 − C(n−c, k) / C(n, k)，来自代码生成评测，衡量能力上限。pass^k 是「连续 k 次都成功」的概率，C(c, k) / C(n, k)，τ-bench 用它衡量可靠性。示例 8 次成功 6 次：pass@1 是 0.75，pass@4 是 1.0，pass^4 只有 0.214。面向用户的 Agent 要看 pass^k，用户不会给你 4 次机会。</p>
+        <p class="lead">成本类指标和轨迹一起记：步数、token、工具调用次数、端到端延迟、单任务花费。成功率相同，步数少的版本更好；成功率高一点但成本翻倍，就要权衡。</p>
+        <CodeBlock code={trajectoryMatch} lang="python" file="trajectory_match.py" src={src('trajectory_match.py')} />
+        <Interview q="Agent 卡在循环里怎么评？">
+          <p>先在 harness 里设上限：最大步数、最大 token、超时，触顶记为失败，并打上 loop 标签。再统计重复调用：同一工具、同一参数连续出现多次。这类失败要单独计数，它的成本远高于普通失败，修法也不同，通常是工具返回的错误信息不够明确，模型不知道该换策略。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="judge">
+        <div class="art-head"><span class="num">07</span><LcBadge kind="hard" text="裁判 · 校准" /></div>
+        <h3>LLM 裁判：先评测裁判，再用裁判评测</h3>
+        <p class="lead">开放回答没法精确匹配，就让另一个模型按标准打分，这叫 LLM-as-a-judge。常见三种形式：单点打分，按 rubric 给通过与否或 1 到 5 分；有参考答案的比对，判断答案和参考是否一致；成对比较，判断两个版本的回答哪个更好。能用二元判断就别用 1 到 10 分，细粒度分数的一致性很差。</p>
+        <p class="lead">rubric 要写成可检查的条款，而不是「回答好不好」。例如「是否只陈述政策，没有承诺额外补偿」「是否区分了质量问题和非质量问题」「出现承诺外补偿直接判 0 分」。让裁判先写理由再给结论，结论用固定格式输出，方便解析。G-Eval 是这个思路：根据标准生成评估步骤，再按步骤打分。</p>
+        <p class="lead">裁判有已知的偏差。位置偏差：成对比较时偏好排在前面（或后面）的那个。长度偏差：偏好更长的回答。自我偏好：偏好同一模型家族的输出。应对办法是成对比较时两种顺序各判一次，结论一致才算胜，否则记平局；rubric 里写明长度不加分；裁判和被测模型用不同的模型。示例里偏向第一个位置的裁判，在质量接近的那一对上换个顺序就换了结论，双向判之后记为平局。</p>
+        <p class="lead">校准是必须的一步。抽 50 到 100 道题人工标注，再让裁判标同一批，计算一致性。原始一致率会骗人：人工有 60% 标「通过」时，一个永远说通过的裁判也有 60% 的一致率。Cohen's kappa 扣掉了这种偶然一致：(观察一致率 − 期望一致率) / (1 − 期望一致率)。示例一致率 0.8，kappa 0.583；永远说通过的裁判 kappa 是 0。一般 kappa 到 0.6 以上，才把裁判用于自动门槛；低于这个数，先改 rubric、换裁判模型，或者把这类题留给人工。</p>
+        <p class="lead">校准不是一次性的。被测模型升级后输出风格会变，裁判的一致性可能下降。定期从裁判打过分的结果里抽样复核，优先看分歧大的和处在阈值边上的题。</p>
+        <CodeBlock code={judgeCalibration} lang="python" file="judge_calibration.py" src={src('judge_calibration.py')} />
+        <Interview q="裁判用便宜的小模型可以吗？">
+          <p>看校准结果，不看模型大小。二元的、规则清晰的判断（是否拒答、是否提到某个事实），小模型常常够用；需要推理的判断（多步计算、代码是否正确），小模型一致性差。可以分层：先用规则和小模型过一遍，只把不确定的交给大模型或人工。代码能检查的（JSON 格式、是否调用了某个工具、数值是否相等）一律用代码，不交给裁判。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="stats">
+        <div class="art-head"><span class="num">08</span><LcBadge kind="hard" text="统计 · 门槛" /></div>
+        <h3>差 3 个点算不算数：看区间，不看点估计</h3>
+        <p class="lead">Agent 评测的分数有两层随机性：题目只是所有可能问题里抽出的一小部分，模型每次的输出又不一样。所以评测分数是一个估计值，要带误差范围。通过率 p、题数 n 时，95% 置信区间的半宽约为 1.96 × √(p(1 − p) / n)。40 道题、通过率 70%，就是正负 14 个点。在这个规模上，两个版本差 3 个点根本分不出来。</p>
+        <p class="lead">bootstrap 不依赖分布假设：从 n 道题里有放回地抽 n 道，算一次均值，重复几千次，取 2.5% 和 97.5% 分位数作为区间。它对任何指标都适用，包括忠实度这种 0 到 1 的连续分数。</p>
+        <p class="lead">比较两个版本时要配对。两个版本跑同一批题，对每道题算差值（候选减基线），再对差值做 bootstrap。题目难度带来的方差在差值里抵消掉了，区间比两个独立区间相减窄得多。</p>
+        <p class="lead">示例模拟了 300 道题，候选版本实际好 5 个点左右。300 道全部配对比较，差值区间是 +0.013 到 +0.090，整个在 0 以上，判定变好。只取前 40 道，点估计反而是 −0.075，区间跨过 0，正确的结论是「分不出来」。小评测集上的单次结果，连方向都可能是反的。</p>
+        <p class="lead">门槛据此写成三档：差值区间整体低于 −margin 就拦下；整体高于 margin 就放行；跨过 0 则不下结论，加题或每题多跑几次。多次运行时，先对每道题的 k 次结果取平均，再做配对 bootstrap。同时看很多指标时，总会有某个指标偶然显著，所以关键指标要提前定好，其余只作参考。</p>
+        <CodeBlock code={statsGate} lang="python" file="stats_gate.py" src={src('stats_gate.py')} />
+        <p class="cue"><span class="t">记忆提示</span>题量翻 4 倍，区间才缩一半。想分辨 2 个点的差异，通常要上千道题，或者配对比较加多次运行。</p>
+        <Interview q="每题跑几次合适？">
+          <p>先测方差。挑 20 道题，每题跑 10 次，看每题通过率的分布：大部分题要么总过、要么总不过，跑 1 到 3 次就够；很多题在 30% 到 70% 之间摇摆，就要跑 5 次以上，并报告 pass^k。温度设为 0 也不保证确定，服务端的批处理和浮点误差都会带来差异，所以 k = 1 的结果同样要当随机变量看。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="benchmarks">
+        <div class="art-head"><span class="num">09</span><LcBadge kind="mid" text="基准 · Benchmark" /></div>
+        <h3>公开 Benchmark：先知道它测什么，再看分数</h3>
+        <p class="lead">公开 benchmark 用来横向比较模型和方法，了解行业水平。它替代不了自己的评测集：题目分布和你的业务不同，还可能被训练数据污染。看榜单时先弄清三件事：测的是哪种能力，怎么判对，有没有不公开答案的测试集。</p>
+        <table class="cmp">
+          <thead>
+            <tr><th>名称</th><th>测什么</th><th>怎么判</th><th>备注</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>SWE-bench Verified</td><td>修复真实 GitHub 仓库的 issue</td><td>跑仓库测试：原先失败的通过，原先通过的不回归</td><td>500 题人工确认的子集</td></tr>
+            <tr><td>Terminal-Bench</td><td>在终端里完成开发和运维任务</td><td>容器里跑校验脚本</td><td>考察多步命令行操作</td></tr>
+            <tr><td>GAIA</td><td>要浏览、读文件、多步推理的助理问题</td><td>最终答案精确匹配</td><td>三个难度级别，测试集答案不公开</td></tr>
+            <tr><td>τ-bench / τ²-bench</td><td>客服场景里按政策调用工具，和模拟用户对话</td><td>结束时比对数据库状态，报告 pass^k</td><td>零售、航空；τ² 加了电信</td></tr>
+            <tr><td>BFCL</td><td>函数调用：选函数、填参数、并行调用、没有合适函数时不调用</td><td>AST 比对，或实际执行</td><td>后续版本加入多轮和 agentic 场景</td></tr>
+            <tr><td>WebArena</td><td>在自建网站上完成网页任务</td><td>检查网站状态或答案</td><td>电商、论坛、GitLab、CMS、地图</td></tr>
+            <tr><td>OSWorld</td><td>在真实桌面系统里操作应用</td><td>每题一个执行校验脚本</td><td>Ubuntu、Windows 虚拟机</td></tr>
+            <tr><td>AgentBench</td><td>8 个环境里的综合 Agent 能力</td><td>各环境各自判分</td><td>操作系统、数据库、知识图谱、网购等</td></tr>
+            <tr><td>LongMemEval</td><td>长期对话记忆的五种能力</td><td>裁判比对答案</td><td>约 500 题，历史长度可达百万 token 量级</td></tr>
+            <tr><td>LoCoMo</td><td>超长多会话对话里的记忆</td><td>问答准确率、事件摘要</td><td>单跳、多跳、时间、对抗题</td></tr>
+            <tr><td>BEIR / MTEB</td><td>检索和嵌入模型</td><td>nDCG@10 等排序指标</td><td>选嵌入模型时看检索子榜</td></tr>
+            <tr><td>HotpotQA / FRAMES / CRAG</td><td>多跳问答与端到端 RAG</td><td>精确匹配或裁判</td><td>CRAG 还考察时效性强的问题</td></tr>
+          </tbody>
+        </table>
+        <p class="lead">读分数时有几个常见陷阱。同一个 benchmark，不同论文用的 Agent 框架、工具、重试次数不同，分数不能直接比。SWE-bench 的分数高度依赖 scaffold，也就是定位文件、跑测试、反复修改的那套流程。还有人把 pass@1 和 pass@k 混在一起报。用公开 benchmark 选模型，最好在 Inspect 这类框架里用同一套 scaffold，自己跑一遍子集。</p>
+        <p class="lead">污染的信号：模型发布晚于 benchmark，且题目来自公开的 GitHub 或网页。应对办法有三种：看有没有在模型训练截止日期之后收集的题（持续更新题库的做法），比较公开集和私有集的分差，或者改写题目后重测。分差明显时，公开集上的高分要打折看。</p>
+        <Interview q="SWE-bench 分数高，能说明它适合我们的代码库吗？">
+          <p>只能说明它在那十几个流行 Python 仓库、在那套 scaffold 下表现好。你的仓库语言、规模、测试覆盖率都不同，结论可能不成立。做法是从自己仓库已关闭的 issue 和 PR 里取 30 到 50 个，按 SWE-bench 的方式构造：issue 描述作为输入，PR 新增的测试作为判定，在同一套环境里跑。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="metric-libs">
+        <div class="art-head"><span class="num">10</span><LcBadge kind="mid" text="框架 · 指标库" /></div>
+        <h3>RAGAS 和 DeepEval：现成的指标实现</h3>
+        <p class="lead">前面手写的指标，主流框架都有现成实现，还带上了裁判提示词、结构化输出解析、并发和缓存。选框架前先分两类：指标库只负责打分，数据和流程你自己组织；运行器和平台负责跑实验、存结果、对比版本。RAGAS 和 DeepEval 属于前者，下一节讲后者。下表把本章提到的工具放在一起。</p>
+        <table class="cmp">
+          <thead>
+            <tr><th>工具</th><th>类型</th><th>擅长</th><th>开源情况</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>RAGAS</td><td>指标库</td><td>RAG 指标、工具调用指标、测试集合成</td><td>Apache-2.0</td></tr>
+            <tr><td>DeepEval</td><td>指标库与测试框架</td><td>pytest 风格断言、G-Eval、Agent 指标</td><td>Apache-2.0，可接 Confident AI 平台</td></tr>
+            <tr><td>TruLens</td><td>指标与追踪</td><td>RAG triad 反馈函数</td><td>MIT</td></tr>
+            <tr><td>Inspect AI</td><td>运行器</td><td>Agent 任务、沙盒、多次运行、公开 benchmark 实现</td><td>MIT</td></tr>
+            <tr><td>promptfoo</td><td>运行器</td><td>prompt × 模型 × 用例矩阵、红队测试、CI</td><td>MIT</td></tr>
+            <tr><td>OpenAI Evals</td><td>运行器</td><td>早期的评测注册表；平台上另有 Evals API</td><td>MIT</td></tr>
+            <tr><td>LangSmith</td><td>平台</td><td>数据集、实验对比、在线评估、标注队列</td><td>闭源 SaaS</td></tr>
+            <tr><td>Langfuse</td><td>平台</td><td>追踪、prompt 管理、数据集实验、裁判评估</td><td>核心 MIT，可自托管</td></tr>
+            <tr><td>Arize Phoenix</td><td>平台</td><td>OpenTelemetry 追踪、评估、实验</td><td>Elastic License 2.0，可自托管</td></tr>
+            <tr><td>Braintrust</td><td>平台</td><td>实验、在线打分、playground</td><td>平台闭源，评估器库 autoevals 开源</td></tr>
+          </tbody>
+        </table>
+        <p class="lead">RAGAS 从 RAG 指标起家。0.4 版把指标集中到 <kbd>ragas.metrics.collections</kbd>，写法变成：用 <kbd>llm_factory</kbd> 包一个 OpenAI（或 Anthropic 等）客户端，每个指标单独实例化，再调用异步的 <kbd>ascore</kbd>，按关键字传字段。网上很多教程还是旧写法：拼一个 <kbd>EvaluationDataset</kbd> 交给 <kbd>evaluate</kbd>。这套接口在 0.4 里还在，新指标走 collections。</p>
+        <p class="lead">字段名要对齐：问题叫 <kbd>user_input</kbd>，答案叫 <kbd>response</kbd>，检索结果叫 <kbd>retrieved_contexts</kbd>，参考答案叫 <kbd>reference</kbd>。不同指标要的字段不同：<kbd>Faithfulness</kbd> 不要参考答案，<kbd>ContextRecall</kbd> 和 <kbd>ContextPrecisionWithReference</kbd> 要。<kbd>AnswerRelevancy</kbd> 还要一个嵌入模型，因为它比较的是反向生成的问题和原问题的相似度。四个指标互不依赖，示例用 <kbd>asyncio.gather</kbd> 并发打分。</p>
+        <p class="lead">RAGAS 也有 Agent 指标：<kbd>ToolCallAccuracy</kbd> 比较消息里的工具调用和参考调用，可以要求严格顺序；<kbd>AgentGoalAccuracy</kbd> 判断多轮对话是否达成目标；<kbd>TopicAdherence</kbd> 检查有没有偏离允许的话题。它的另一个用处是合成测试集：从文档构建知识图谱，生成单跳和多跳问题。</p>
+        <CodeBlock code={ragasMetrics} lang="python" file="ragas_metrics.py" src={src('ragas_metrics.py')} />
+        <p class="lead">DeepEval 把评测写成 pytest 测试。一条 <kbd>LLMTestCase</kbd> 装下 <kbd>input</kbd>、<kbd>actual_output</kbd>、<kbd>expected_output</kbd>、<kbd>retrieval_context</kbd>，以及 <kbd>tools_called</kbd> 和 <kbd>expected_tools</kbd>。<kbd>assert_test</kbd> 对每个指标打分并和阈值比较，任一不过，这条测试就失败。所以它能直接放进 CI，失败信息里还带着裁判给的理由。</p>
+        <p class="lead">内置指标覆盖 RAG（<kbd>FaithfulnessMetric</kbd>、<kbd>AnswerRelevancyMetric</kbd>、<kbd>ContextualPrecisionMetric</kbd>、<kbd>ContextualRecallMetric</kbd>）和 Agent（<kbd>ToolCorrectnessMetric</kbd>、<kbd>TaskCompletionMetric</kbd>）。<kbd>ToolCorrectnessMetric</kbd> 默认只比工具名；打开 <kbd>should_consider_ordering</kbd> 会考虑顺序；在 <kbd>evaluation_params</kbd> 里加上 <kbd>ToolCallParams.INPUT_PARAMETERS</kbd> 才比参数。<kbd>GEval</kbd> 用于自定义标准：给出 <kbd>evaluation_steps</kbd>，选定参与评判的字段。4.x 里字段枚举叫 <kbd>SingleTurnParams</kbd>，旧名 <kbd>LLMTestCaseParams</kbd> 还能用，但会提示弃用。</p>
+        <p class="lead">运行用 <kbd>deepeval test run</kbd>，它在 pytest 外面加了并发和结果汇总。裁判模型通过 <kbd>model</kbd> 参数指定，示例从 <kbd>EVAL_JUDGE_MODEL</kbd> 环境变量读模型名；也可以传自定义的模型类，接本地模型。</p>
+        <CodeBlock code={deepevalTest} lang="python" file="test_deepeval_agent.py" src={src('test_deepeval_agent.py')} />
+        <Interview q="RAGAS 和 DeepEval 怎么选？">
+          <p>两者的指标重合度很高。偏数据分析、要在 notebook 里批量算分、要合成测试集，用 RAGAS；要把评测当单元测试放进 CI、按阈值让构建失败，用 DeepEval。不论选哪个，都先用第 07 节的方法拿 50 道人工标注题校准它的裁判，框架默认的提示词不一定适合你的领域和语言。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="platforms">
+        <div class="art-head"><span class="num">11</span><LcBadge kind="mid" text="框架 · 运行器与平台" /></div>
+        <h3>Inspect、LangSmith、promptfoo：把评测跑成实验</h3>
+        <p class="lead">指标库解决「怎么算分」，运行器和平台解决「怎么跑、怎么存、怎么比」：管理数据集版本，并发调用被测系统，每题重复多次，把轨迹和分数存下来，在界面里逐题对比两个版本。</p>
+        <p class="lead">Inspect AI 是英国 AI 安全研究所（AISI）开源的评测框架，核心是 <kbd>Task</kbd>。<kbd>dataset</kbd> 是一组 <kbd>Sample</kbd>，每个有输入和目标；<kbd>solver</kbd> 是处理流程，这里依次是系统提示、挂工具、<kbd>generate</kbd>，后者会循环调用模型和工具直到给出回答；<kbd>scorer</kbd> 是打分器，可以挂多个。<kbd>epochs</kbd> 让每题跑多次，reducer 决定怎么合并：<kbd>mean</kbd> 取平均，<kbd>pass_at_2</kbd> 看两次里至少一次成功。</p>
+        <p class="lead">它对 Agent 的支持比较完整：工具可以跑在 Docker 沙盒里，有 <kbd>message_limit</kbd>、<kbd>token_limit</kbd> 这类上限，日志可以用 <kbd>inspect view</kbd> 逐步回放。示例里的 <kbd>used_tool</kbd> 是自定义 scorer，从消息历史里找助手发出的工具调用。inspect_evals 仓库里有 GAIA、SWE-bench 等公开 benchmark 的实现，自己跑公开 benchmark 时优先考虑它。</p>
+        <CodeBlock code={inspectTask} lang="python" file="inspect_task.py" src={src('inspect_task.py')} />
+        <p class="lead">LangSmith 是 LangChain 的平台。数据集存在平台上，每次改动跑成一个 experiment。evaluator 是普通函数，按参数名接收 <kbd>inputs</kbd>、<kbd>outputs</kbd>、<kbd>reference_outputs</kbd>，返回布尔值、数字，或者带 <kbd>key</kbd> 的字典；<kbd>summary_evaluators</kbd> 看整批结果，适合放通过率这类汇总指标。</p>
+        <p class="lead"><kbd>num_repetitions</kbd> 设重复次数，<kbd>metadata</kbd> 记下模型和 prompt 版本，界面里可以把两个 experiment 并排逐题比较。它还支持在线评估规则（对线上 trace 抽样跑裁判）和标注队列。用 <kbd>traceable</kbd> 装饰的函数会把内部调用记成 trace，不依赖 LangChain 也能用。<kbd>Client()</kbd> 从 <kbd>LANGSMITH_API_KEY</kbd> 环境变量读取密钥。</p>
+        <CodeBlock code={langsmithExperiment} lang="python" file="langsmith_experiment.py" src={src('langsmith_experiment.py')} />
+        <p class="lead">promptfoo 是一个 Node 命令行工具，用 YAML 声明 prompts、providers 和 tests，跑出 prompt × 模型 × 用例的矩阵。断言类型很多：<kbd>contains</kbd>、<kbd>icontains</kbd> 这类确定性检查；<kbd>llm-rubric</kbd> 裁判；<kbd>context-faithfulness</kbd>、<kbd>answer-relevance</kbd> 这类 RAG 指标；<kbd>latency</kbd>、<kbd>cost</kbd> 这类性能检查。任何断言前加 <kbd>not-</kbd> 就取反。<kbd>defaultTest</kbd> 里的断言对每条用例生效，裁判模型也在这里和被测模型分开配置。</p>
+        <p class="lead">它的另一个用途是红队测试：生成越狱、提示注入、越权类的攻击用例。适合 prompt 迭代、模型选型，以及在 CI 里跑回归。示例对比了两版 prompt：v7 多了「资料里没有就回答不确定」和「不承诺额外补偿」，拒答题和越权题会拉开差距。</p>
+        <CodeBlock code={promptfooConfig} lang="yaml" file="promptfooconfig.yaml" src={src('promptfooconfig.yaml')} />
+        <p class="lead">平台类还有 Langfuse、Arize Phoenix 和 Braintrust。Langfuse 开源、可自托管，追踪、prompt 管理、数据集实验、裁判评估都有，SDK 基于 OpenTelemetry。Phoenix 同样基于 OpenTelemetry（OpenInference 约定），偏追踪和评估。Braintrust 是商业平台，实验对比和在线打分做得完整。选型主要看两点：数据能不能出公司，决定能不能用 SaaS；现有技术栈，LangChain 用户上手 LangSmith 最快，已经接了 OpenTelemetry 的团队用 Langfuse 或 Phoenix 更顺。</p>
+        <Interview q="自己写 harness 还是用平台？">
+          <p>评估器和数据集格式自己掌握，运行和展示交给平台。评估器是业务逻辑，写成普通函数，就像本章的 <kbd>(Case, Trace) → float</kbd>，换平台时只改一层适配。平台的价值在逐题对比界面、trace 回放和标注队列，这些自己做成本高。早期十几道题，一个 pytest 文件就够；题目上百、多人协作、要看历史趋势时，再上平台。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="online">
+        <div class="art-head"><span class="num">12</span><LcBadge kind="hard" text="线上 · 可观测" /></div>
+        <h3>线上评估：在真实流量里找评测集没覆盖的问题</h3>
+        <p class="lead">离线评测集再好，也是过去的样本。线上会出现新的提问方式、新的文档、新的工具错误。线上评估的目标是在真实流量上持续打分，发现问题，再把问题样本送回离线评测集。</p>
+        <p class="lead">第一步是可观测。每次请求记成一条 trace，Agent 调用、工具调用、模型调用各是一个 span。OpenTelemetry 的 GenAI 语义约定给了统一的命名：span 名形如 <kbd>invoke_agent refund-agent</kbd>、<kbd>execute_tool search_policy</kbd>、<kbd>chat gpt-4o-mini</kbd>，属性用 <kbd>gen_ai.operation.name</kbd>、<kbd>gen_ai.request.model</kbd>、<kbd>gen_ai.usage.input_tokens</kbd>、<kbd>gen_ai.tool.name</kbd> 等。按约定埋点后，Langfuse、Phoenix 和各家 APM 都能直接解析。这套约定目前还是 Development 状态，字段名可能调整，升级 SDK 时要看变更说明。</p>
+        <p class="lead">第二步是分层打分。规则检查便宜，对全部流量跑：答案是否为空、是否出现禁用的承诺、延迟是否超预算、JSON 是否合法。裁判贵，按比例抽样，例如 10% 到 30%；规则失败的请求一律送裁判。抽样按会话 id 的哈希决定，同一个会话要么整段被评，要么都不评，方便结合多轮上下文看。示例用 SHA-256 取前 4 个字节分桶。评估结果作为 <kbd>gen_ai.evaluation.result</kbd> 事件挂在 agent span 上，和 trace 存在一起。</p>
+        <p class="lead">第三步是汇总信号。除了自动分数，用户反馈（点赞、点踩、重新生成、转人工）是很强的信号，但有偏差：不满意的用户更愿意反馈。看板按天看各项指标、成本和延迟的分布，并设告警阈值。</p>
+        <p class="lead">第四步是闭环，见下图。低分、差评、报错的 trace 进复核队列，人工确认问题、写好参考答案，加进下一版评测集作为回归用例。修复之后，先在离线评测里过门槛，再发布。评测集会随着线上问题持续变厚，而且每一条都真实发生过。</p>
+        <EvalLoopDiagram />
+        <p class="lead">示例跑了两个会话，每个会话产生 3 个 span。第二个会话的回答里有「平台补贴」，规则检查失败，于是一定会送裁判；忠实度 0.5，低于 0.8，进了复核队列。第一个会话规则通过，是否被裁判抽中取决于会话 id 的哈希。本地用内存 exporter，生产环境换成 OTLP exporter，地址和鉴权都通过环境变量注入，不写进代码，也不进 trace。线上 trace 含有用户输入，进评测集之前要脱敏；裁判调用的是外部模型时，要确认数据允许出境。</p>
+        <CodeBlock code={onlineEval} lang="python" file="online_eval.py" src={src('online_eval.py')} />
+        <p class="cue"><span class="t">记忆提示</span>规则全量、裁判抽样、失败必评、按会话分桶；低分样本经人工确认后才进评测集。</p>
+        <Interview q="线上没有参考答案，能评什么？">
+          <p>不需要参考答案的都能评：忠实度、上下文相关、答案切题（RAG triad），拒答是否得当，格式和安全规则，工具调用有没有报错，步数和成本。正确性需要参考答案，只能在复核之后补上。还可以用隐式信号：用户看完回答立刻改写问题重问，或者点了转人工，通常说明回答没解决问题。</p>
+        </Interview>
+      </section>
+    </main>
+  </div>
+</BaseLayout>
+
+<style>
+  .chapter-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+
+  .hero p + p { margin-top: 12px; }
+  p.lead + p.lead { margin-top: 12px; }
+
+  p.cue { margin: 18px 0 0; padding-left: 13px; border-left: 2px solid var(--teal);
+    font-size: 14.5px; color: var(--graphite); }
+  p.cue .t { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.4px;
+    color: var(--teal); margin-right: 8px; }
+
+  table.cmp { width: 100%; border-collapse: collapse; margin: 14px 0 4px; font-size: 14px;
+    display: block; overflow-x: auto; }
+  table.cmp th, table.cmp td { text-align: left; padding: 9px 12px;
+    border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.cmp th { font-family: var(--font-mono); font-size: 10.5px; font-weight: 600;
+    letter-spacing: 0.4px; color: var(--muted); white-space: nowrap; }
+  table.cmp td { color: var(--graphite); }
+  table.cmp td:first-child { color: var(--ink); white-space: nowrap; }
+  table.cmp tbody tr:last-child td { border-bottom: none; }
+</style>

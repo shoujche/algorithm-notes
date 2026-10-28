@@ -1,0 +1,66 @@
+---
+// RAG 链路上的评测点：上方需要标注，下方三条是 RAG triad
+const TEAL = '#2F9E7E';
+const COBALT = '#3F5BD6';
+const ORANGE = '#E8663D';
+const GRAPHITE = '#565A66';
+const stages = [
+  { x: 30, t: '问题', s: 'query' },
+  { x: 210, t: '检索器', s: 'BM25 / 向量 / 重排' },
+  { x: 390, t: '上下文 Top-k', s: 'retrieved chunks' },
+  { x: 570, t: '生成器 LLM', s: 'prompt + 上下文' },
+  { x: 750, t: '答案', s: 'response' },
+];
+---
+<div class="stage"><div class="grid"><div class="svg-wrap">
+  <svg class="arch" width="920" height="360" viewBox="0 0 920 360" role="img" aria-label="RAG 评测点架构图">
+    <defs>
+      <marker id="re-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="#9AA0B4" />
+      </marker>
+    </defs>
+
+    <text class="band-lbl" x="30" y="20">需要标注 · REFERENCE-BASED</text>
+    <rect class="box ref" x="390" y="30" width="140" height="48" rx="10" />
+    <text class="t" x="460" y="52" text-anchor="middle">标注相关文档</text>
+    <text class="s" x="460" y="68" text-anchor="middle">relevant doc ids</text>
+    <rect class="box ref" x="750" y="30" width="140" height="48" rx="10" />
+    <text class="t" x="820" y="52" text-anchor="middle">参考答案</text>
+    <text class="s" x="820" y="68" text-anchor="middle">reference</text>
+
+    {stages.map((st, i) => (
+      <>
+        <rect class="box" x={st.x} y="150" width="140" height="56" rx="10" />
+        <text class="t" x={st.x + 70} y="174" text-anchor="middle">{st.t}</text>
+        <text class="s" x={st.x + 70} y="192" text-anchor="middle">{st.s}</text>
+        {i < stages.length - 1 && (
+          <line class="flow" x1={st.x + 140} y1="178" x2={st.x + 178} y2="178" marker-end="url(#re-flow)" />
+        )}
+      </>
+    ))}
+
+    <!-- 有标注的三条 -->
+    <line class="rel" stroke={COBALT} x1="460" y1="78" x2="460" y2="150" />
+    <text class="lbl" x="452" y="118" text-anchor="end" fill={COBALT}>Recall@k · MRR · nDCG</text>
+    <line class="rel" stroke={COBALT} x1="820" y1="78" x2="820" y2="150" />
+    <text class="lbl" x="828" y="118" fill={COBALT}>Correctness</text>
+    <line class="rel" stroke={COBALT} x1="750" y1="66" x2="522" y2="150" />
+    <rect class="lbl-bg" x="600" y="92" width="104" height="16" rx="4" />
+    <text class="lbl" x="652" y="104" text-anchor="middle" fill={COBALT}>Context Recall</text>
+
+    <!-- RAG triad -->
+    <path class="rel" stroke={TEAL} d="M110 206 C 110 262, 440 262, 440 206" />
+    <text class="lbl" x="275" y="268" text-anchor="middle" fill={TEAL}>Context Relevance · 上下文相关</text>
+    <path class="rel" stroke={ORANGE} d="M480 206 C 480 262, 800 262, 800 206" />
+    <text class="lbl" x="640" y="268" text-anchor="middle" fill={ORANGE}>Faithfulness · 忠实度</text>
+    <path class="rel" stroke={GRAPHITE} d="M80 206 C 80 330, 840 330, 840 206" />
+    <text class="lbl" x="460" y="320" text-anchor="middle" fill={GRAPHITE}>Answer Relevance · 切题</text>
+
+    {[[110, TEAL], [440, TEAL], [480, ORANGE], [800, ORANGE], [80, GRAPHITE], [840, GRAPHITE]].map(([x, color]) => (
+      <circle cx={x} cy="206" r="3.2" fill={color} />
+    ))}
+    <text class="band-lbl" x="30" y="350">不需要标注 · RAG TRIAD</text>
+  </svg>
+</div></div>
+  <div class="panel caption">上方三条要人工标注：哪些文档相关、标准答案是什么。下方三条只用问题、上下文和答案，裁判就能打分，所以线上也能跑。上下文相关低说明要查检索；忠实度低说明要查生成，模型在上下文之外编了内容。</div>
+</div>

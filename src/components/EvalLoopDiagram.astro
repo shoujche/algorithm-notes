@@ -1,0 +1,71 @@
+---
+// 线上可观测与离线评测的闭环
+const TEAL = '#2F9E7E';
+const COBALT = '#3F5BD6';
+const ORANGE = '#E8663D';
+const online = [
+  { t: '用户请求', s: '真实流量' },
+  { t: 'Agent 服务', s: 'OpenTelemetry 埋点' },
+  { t: 'Trace 采集', s: 'gen_ai.* span' },
+  { t: '在线评估', s: '规则全量 · 裁判抽样' },
+  { t: '看板与告警', s: '分数 · 成本 · 延迟' },
+];
+const offline = [
+  { x: 58, t: '离线评测', s: 'CI 门槛 · 置信区间' },
+  { x: 238, t: '评测集 vN+1', s: '加进回归用例' },
+  { x: 418, t: '人工复核', s: '确认问题 · 写参考答案' },
+  { x: 598, t: '失败样本', s: '差评 · 低分 · 报错' },
+];
+---
+<div class="stage"><div class="grid"><div class="svg-wrap">
+  <svg class="arch" width="960" height="300" viewBox="0 0 960 300" role="img" aria-label="线上与离线评测闭环">
+    <defs>
+      <marker id="el-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="#9AA0B4" />
+      </marker>
+      <marker id="el-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill={ORANGE} />
+      </marker>
+    </defs>
+
+    <text class="band-lbl" transform="translate(26 112) rotate(-90)">ONLINE · 线上</text>
+    <text class="band-lbl" transform="translate(26 262) rotate(-90)">OFFLINE · 离线</text>
+    <rect class="band" x="40" y="24" width="904" height="104" rx="12" />
+    <rect class="band" x="40" y="172" width="904" height="104" rx="12" />
+
+    {online.map((b, i) => {
+      const x = 58 + i * 180;
+      return (
+        <>
+          <rect class="box" x={x} y="44" width="156" height="64" rx="10" />
+          <rect x={x} y="44" width="4" height="64" rx="2" fill={COBALT} />
+          <text class="t" x={x + 16} y="70">{b.t}</text>
+          <text class="s" x={x + 16} y="89">{b.s}</text>
+          {i < online.length - 1 && (
+            <line class="flow" x1={x + 156} y1="76" x2={x + 177} y2="76" marker-end="url(#el-flow)" />
+          )}
+        </>
+      );
+    })}
+
+    {offline.map((b, i) => (
+      <>
+        <rect class={i === 0 ? 'box hot' : 'box'} x={b.x} y="192" width="156" height="64" rx="10" />
+        {i > 0 && <rect x={b.x} y="192" width="4" height="64" rx="2" fill={TEAL} />}
+        <text class="t" x={b.x + 16} y="218">{b.t}</text>
+        <text class="s" x={b.x + 16} y="237">{b.s}</text>
+        {i > 0 && (
+          <line class="flow" x1={b.x} y1="224" x2={b.x - 21} y2="224" marker-end="url(#el-flow)" />
+        )}
+      </>
+    ))}
+
+    <line class="flow" x1="676" y1="108" x2="676" y2="189" marker-end="url(#el-flow)" />
+    <text class="lbl" x="684" y="154" fill="#8A8E99">低分 · 差评进复核</text>
+
+    <path class="rel" stroke={ORANGE} d="M136 192 V150 H316 V111" marker-end="url(#el-orange)" />
+    <text class="lbl" x="226" y="144" text-anchor="middle" fill={ORANGE}>过门槛才发布</text>
+  </svg>
+</div></div>
+  <div class="panel caption">离线评测集回答「这个版本会不会比上个版本差」，线上评估回答「真实用户碰到了什么」。线上的低分轨迹经过人工确认，变成下一版评测集里的回归用例，两边就接成一个环。</div>
+</div>

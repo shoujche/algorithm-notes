@@ -1,0 +1,114 @@
+---
+// 离线评测 harness 架构：数据 → 执行 → 评估 → 门槛
+const TEAL = '#2F9E7E';
+const COBALT = '#3F5BD6';
+const ORANGE = '#E8663D';
+const dataChips = ['标准用例', '边界 · 拒答 · 越权', '多轮 · 长上下文'];
+const agentChips = [
+  { x: 268, y: 206, t: 'LLM' },
+  { x: 414, y: 206, t: '工具 · mock 或沙盒' },
+  { x: 268, y: 246, t: '检索器 · 索引快照' },
+  { x: 414, y: 246, t: '记忆 · 每题重置' },
+];
+const evalChips = ['代码检查 · 匹配 / 格式 / 轨迹', 'LLM 裁判 · rubric / 成对', '人工抽检 · 分歧和低分'];
+---
+<div class="stage"><div class="grid"><div class="svg-wrap">
+  <svg class="arch" width="920" height="420" viewBox="0 0 920 420" role="img" aria-label="离线评测 harness 架构图">
+    <defs>
+      <marker id="eh-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="#9AA0B4" />
+      </marker>
+      <marker id="eh-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill={TEAL} />
+      </marker>
+    </defs>
+
+    <text class="band-lbl" x="24" y="24">DATA · 数据</text>
+    <text class="band-lbl" x="240" y="24">RUN · 执行</text>
+    <text class="band-lbl" x="624" y="24">SCORE · 评估</text>
+    <rect class="band" x="16" y="34" width="188" height="372" rx="12" />
+    <rect class="band" x="232" y="34" width="356" height="372" rx="12" />
+    <rect class="band" x="616" y="34" width="288" height="372" rx="12" />
+
+    <!-- 数据层 -->
+    <rect class="box" x="32" y="60" width="156" height="150" rx="10" />
+    <rect x="32" y="60" width="4" height="150" rx="2" fill={TEAL} />
+    <text class="t" x="48" y="84">评测集</text>
+    <text class="s" x="48" y="101">版本化 · 冻结后再跑</text>
+    {dataChips.map((t, i) => (
+      <>
+        <rect class="chip" x="44" y={114 + i * 32} width="132" height="26" rx="7" />
+        <text class="c" x="110" y={131 + i * 32} text-anchor="middle">{t}</text>
+      </>
+    ))}
+
+    <line class="flow" x1="110" y1="210" x2="110" y2="238" />
+    <rect class="box" x="32" y="238" width="156" height="64" rx="10" />
+    <rect x="32" y="238" width="4" height="64" rx="2" fill={TEAL} />
+    <text class="t" x="48" y="262">数据卡</text>
+    <text class="s" x="48" y="281">来源 · 标注规则 · 污染</text>
+
+    <rect class="box" x="32" y="330" width="156" height="64" rx="10" />
+    <rect x="32" y="330" width="4" height="64" rx="2" fill={TEAL} />
+    <text class="t" x="48" y="354">线上回流</text>
+    <text class="s" x="48" y="373">差评 · 报错 · 低分轨迹</text>
+    <path class="rel" stroke={TEAL} d="M32 362 H24 V135 H30" marker-end="url(#eh-teal)" />
+
+    <!-- 执行层 -->
+    <rect class="box" x="252" y="60" width="316" height="64" rx="10" />
+    <rect x="252" y="60" width="4" height="64" rx="2" fill={COBALT} />
+    <text class="t" x="268" y="85">Runner</text>
+    <text class="s" x="268" y="104">每题跑 k 次 · 并发 · 固定温度和种子</text>
+
+    <rect class="box" x="252" y="150" width="316" height="150" rx="10" />
+    <rect x="252" y="150" width="4" height="150" rx="2" fill={COBALT} />
+    <text class="t" x="268" y="175">被测 Agent</text>
+    <text class="s" x="268" y="192">prompt · 模型 · 索引 · 代码，同一版本</text>
+    {agentChips.map((c) => (
+      <>
+        <rect class="chip" x={c.x} y={c.y} width="138" height="30" rx="7" />
+        <text class="c" x={c.x + 69} y={c.y + 19} text-anchor="middle">{c.t}</text>
+      </>
+    ))}
+
+    <rect class="box" x="252" y="326" width="316" height="68" rx="10" />
+    <rect x="252" y="326" width="4" height="68" rx="2" fill={COBALT} />
+    <text class="t" x="268" y="351">轨迹 Trace</text>
+    <text class="s" x="268" y="370">消息 · 工具调用 · 检索结果 · token · 延迟</text>
+
+    <line class="flow" x1="188" y1="92" x2="249" y2="92" marker-end="url(#eh-flow)" />
+    <line class="flow" x1="410" y1="124" x2="410" y2="147" marker-end="url(#eh-flow)" />
+    <line class="flow" x1="410" y1="300" x2="410" y2="323" marker-end="url(#eh-flow)" />
+
+    <!-- 评估层 -->
+    <rect class="box" x="636" y="60" width="248" height="150" rx="10" />
+    <rect x="636" y="60" width="4" height="150" rx="2" fill={ORANGE} />
+    <text class="t" x="652" y="84">评估器</text>
+    <text class="s" x="652" y="101">按题型挑，可以叠加</text>
+    {evalChips.map((t, i) => (
+      <>
+        <rect class="chip" x="648" y={114 + i * 32} width="224" height="26" rx="7" />
+        <text class="c" x="760" y={131 + i * 32} text-anchor="middle">{t}</text>
+      </>
+    ))}
+
+    <rect class="box" x="636" y="238" width="248" height="64" rx="10" />
+    <rect x="636" y="238" width="4" height="64" rx="2" fill={ORANGE} />
+    <text class="t" x="652" y="262">报告</text>
+    <text class="s" x="652" y="281">均值 · 置信区间 · 分组 · 对比基线</text>
+
+    <rect class="box hot" x="636" y="330" width="248" height="64" rx="10" />
+    <text class="t" x="652" y="354">发布门槛</text>
+    <text class="s" x="652" y="373">显著变差就拦下，通过才合并</text>
+
+    <path class="flow" d="M568 360 H602 V135 H633" marker-end="url(#eh-flow)" />
+    <line class="flow" x1="760" y1="210" x2="760" y2="235" marker-end="url(#eh-flow)" />
+    <line class="flow" x1="760" y1="302" x2="760" y2="327" marker-end="url(#eh-flow)" />
+
+    <path class="rel" stroke={TEAL} d="M110 60 V46 H760 V57" marker-end="url(#eh-teal)" />
+    <rect class="lbl-bg" x="338" y="38" width="164" height="16" rx="4" />
+    <text class="lbl" x="420" y="50" text-anchor="middle" fill={TEAL}>参考答案 · rubric · 期望轨迹</text>
+  </svg>
+</div></div>
+  <div class="panel caption">实线是一次评测的数据流，虚线是评估器额外读取的标注。被测 Agent 的四个部件都要固定版本；工具和记忆每题重置，不然前一题的副作用会被算到后一题头上。</div>
+</div>

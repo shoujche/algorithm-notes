@@ -382,6 +382,29 @@ export const chapters: Chapter[] = [
       { id: 'approval', num: '06', label: '写之前先审批' },
     ],
   },
+  {
+    slug: 'agent-eval',
+    category: 'agent',
+    num: 'A09',
+    cn: 'Agent 评测与 Benchmark',
+    en: 'Agent Evaluation',
+    summary: '从评测分层和 harness 讲起，手写 RAG 检索与生成指标、记忆探针、工具轨迹匹配、pass^k、裁判校准和 bootstrap 门槛，再对照 RAGAS、DeepEval、Inspect、LangSmith、promptfoo 与线上 OpenTelemetry 评估。',
+    ready: true,
+    sections: [
+      { id: 'layers', num: '01', label: '评测分层与 harness' },
+      { id: 'dataset', num: '02', label: '评测集怎么来' },
+      { id: 'retrieval', num: '03', label: 'RAG 检索指标' },
+      { id: 'generation', num: '04', label: 'RAG 生成指标' },
+      { id: 'memory', num: '05', label: '记忆评测' },
+      { id: 'tools', num: '06', label: '工具调用与轨迹' },
+      { id: 'judge', num: '07', label: 'LLM 裁判与校准' },
+      { id: 'stats', num: '08', label: '统计与发布门槛' },
+      { id: 'benchmarks', num: '09', label: '公开 Benchmark' },
+      { id: 'metric-libs', num: '10', label: '指标库：RAGAS / DeepEval' },
+      { id: 'platforms', num: '11', label: '运行器与平台' },
+      { id: 'online', num: '12', label: '线上评估闭环' },
+    ],
+  },
 
   // ===== 组件板块 =====
   {

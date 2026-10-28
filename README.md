@@ -212,6 +212,24 @@ Agent 核心真题（A04）是问答页，没有单独源码文件。
 | [`memory_store.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/deepagents/memory_store.py) | /memories/ 走 StoreBackend，换 thread_id 仍可读 |
 | [`approve_write.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/deepagents/approve_write.py) | interrupt_on 暂停 write_file，批准后同一条线程继续 |
 
+- Agent 评测与 Benchmark 章节源码：[`src/code/agent/agent-eval/`](https://github.com/shoujche/algorithm-notes/tree/main/src/code/agent/agent-eval)
+
+| 文件 | 说明 |
+| --- | --- |
+| [`eval_harness.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-eval/eval_harness.py) | 数据集 → 被测 agent → 轨迹 → 评估器 → 分组报告 → 对比基线的门槛 |
+| [`retrieval_metrics.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-eval/retrieval_metrics.py) | Recall@k、Precision@k、Hit Rate、MRR、nDCG，chunk 折回文档再算 |
+| [`rag_judge.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-eval/rag_judge.py) | 拆陈述的 faithfulness、context precision / recall，裁判可替换 |
+| [`memory_probe.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-eval/memory_probe.py) | 抽取、跨会话、更新、时间、拒答五类探针，对比朴素与版本化记忆 |
+| [`trajectory_match.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-eval/trajectory_match.py) | 五种轨迹匹配、工具选择 precision / recall、pass@k 与 pass^k |
+| [`judge_calibration.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-eval/judge_calibration.py) | Cohen's kappa 校准裁判，成对比较双向判消除位置偏差 |
+| [`stats_gate.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-eval/stats_gate.py) | 二项区间、bootstrap、配对差值区间和三档发布门槛 |
+| [`ragas_metrics.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-eval/ragas_metrics.py) | RAGAS 0.4 collections 指标的 ascore 写法（需模型密钥） |
+| [`test_deepeval_agent.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-eval/test_deepeval_agent.py) | DeepEval 4.3 pytest 用例：RAG 指标、工具正确性、GEval |
+| [`inspect_task.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-eval/inspect_task.py) | Inspect AI Task：工具、自定义 scorer、epochs 与 pass_at_2 |
+| [`langsmith_experiment.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-eval/langsmith_experiment.py) | LangSmith 数据集、evaluator、summary evaluator、重复实验 |
+| [`promptfooconfig.yaml`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-eval/promptfooconfig.yaml) | promptfoo 两版 prompt × 两个模型，确定性断言加裁判断言 |
+| [`online_eval.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/agent-eval/online_eval.py) | OpenTelemetry GenAI span、规则全量、裁判抽样、低分进复核队列 |
+
 ## 新增章节
 
 完整流程已固化为 Cursor Skill：[`.cursor/skills/add-algo-chapter`](.cursor/skills/add-algo-chapter/SKILL.md)（登记章节 → 写真实源码 → 建页面/图解/动画 → 更新 README → 构建校验 → 评审后推送）。
