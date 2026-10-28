@@ -63,27 +63,24 @@ const roadmap = boards.map((board) => ({
                 {s.master.map((m) => <li>{m}</li>)}
               </ul>
             </div>
-            <div class="step-cards">
-              {s.chapters.map((c) => (
-                c.ready ? (
-                  <a class="topic-card" href={withBase(chapterPath(c))}>
-                    <span class="tnum">CH.{c.num}</span>
-                    <h3>{c.cn}</h3>
-                    <span class="ten">{c.en}</span>
-                    <p>{c.summary}</p>
-                    <div class="go">阅读章节 →</div>
-                  </a>
-                ) : (
-                  <div class="topic-card soon">
-                    <span class="tnum">CH.{c.num}</span>
-                    <h3>{c.cn}</h3>
-                    <span class="ten">{c.en}</span>
-                    <p>{c.summary}</p>
-                    <div class="go"><span class="badge-soon">规划中 Soon</span></div>
-                  </div>
-                )
-              ))}
-            </div>
+            <ol class="ch-list">
+              {s.chapters.map((c) => {
+                const Tag = c.ready ? 'a' : 'div';
+                return (
+                  <li>
+                    <Tag class:list={['ch-row', { soon: !c.ready }]} href={c.ready ? withBase(chapterPath(c)) : undefined}>
+                      <span class="ch-num">{c.num}</span>
+                      <span class="ch-title">
+                        <span class="ch-cn">{c.cn}</span>
+                        <span class="ch-en">{c.en}</span>
+                      </span>
+                      <span class="ch-sum">{c.summary}</span>
+                      <span class="ch-go">{c.ready ? '→' : <span class="ch-soon">规划中</span>}</span>
+                    </Tag>
+                  </li>
+                );
+              })}
+            </ol>
           </div>
         ))}
       </section>
@@ -138,11 +135,33 @@ const roadmap = boards.map((board) => ({
   .master li::before { content: ""; position: absolute; left: 2px; top: 0.62em; width: 6px; height: 6px;
     border-radius: 2px; border: 1.5px solid var(--board-color); }
 
-  .step-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px;
-    align-content: start; }
-  .step-cards .topic-card .tnum { color: var(--board-color); }
-  .step-cards .topic-card:hover { border-color: var(--board-color); }
+  .ch-list { list-style: none; margin: 0; padding: 0; align-self: start;
+    border: 1px solid var(--line); border-radius: 14px; background: var(--surface); overflow: hidden; }
+  .ch-list li + li { border-top: 1px solid var(--line); }
+  .ch-row { display: grid; grid-template-columns: 52px 200px minmax(0, 1fr) 56px; gap: 18px;
+    align-items: center; min-height: 76px; padding: 14px 20px; color: inherit; transition: background .15s; }
+  a.ch-row:hover { background: color-mix(in srgb, var(--board-color) 5%, var(--surface)); }
+  .ch-num { font-family: var(--font-mono); font-size: 12px; font-weight: 600; letter-spacing: .8px;
+    color: var(--board-color); }
+  .ch-title { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .ch-cn { font-family: var(--font-display); font-size: 16.5px; font-weight: 600; letter-spacing: -.2px;
+    color: var(--ink); }
+  .ch-en { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .8px; text-transform: uppercase;
+    color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ch-sum { font-size: 13.5px; line-height: 1.6; color: var(--graphite);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .ch-go { justify-self: end; font-family: var(--font-mono); font-size: 15px; font-weight: 600;
+    color: var(--muted); transition: transform .15s, color .15s; }
+  a.ch-row:hover .ch-go { color: var(--board-color); transform: translateX(3px); }
+  .ch-row.soon .ch-num, .ch-row.soon .ch-cn, .ch-row.soon .ch-sum { opacity: .5; }
+  .ch-soon { font-size: 10px; font-weight: 500; color: var(--muted); border: 1px solid var(--line-strong);
+    border-radius: 6px; padding: 2px 6px; white-space: nowrap; }
 
+  @media (max-width: 1000px) {
+    .ch-row { grid-template-columns: 44px minmax(0, 1fr) 40px; }
+    .ch-sum { grid-column: 2 / 3; }
+    .ch-go { grid-row: 1; grid-column: 3; }
+  }
   @media (max-width: 900px) {
     .ov-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .step { grid-template-columns: 1fr; }
