@@ -1,0 +1,94 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import Interview from '../../components/Interview.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import { chapters } from '../../data/topics';
+import {
+  CODE_DIR,
+  batchAcks,
+  consumerClient,
+  consumerGroup,
+  manualCommit,
+  producerClient,
+} from '../../data/kafka-code';
+import { ghBlob } from '../../lib/github';
+import { withBase } from '../../lib/url';
+
+const chapter = chapters.find((item) => item.slug === 'kafka')!;
+const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
+const rabbit = withBase('/component/rabbitmq');
+---
+<BaseLayout title="Kafka · 组件 · 算法、Python 与 Agent 学习手记" active="component">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">组件 / {chapter.num} · Kafka</span>
+        <h2>先把日志和分区讲清，<em>再调生产者和消费者</em></h2>
+        <p>Kafka 把消息追加进分区日志。生产者决定一批写多少、等几个副本；消费者以组为单位分这些分区，处理完再提交位点。客户端示例用的是 confluent-kafka 的配置名，直接运行文件只检查这份配置，不会去连 broker。后面每个机制再配一个小模型，把「分到谁」「等几个副本」「崩溃后从哪再读」单独算出来。消息进了业务之后怎么去重，见 <a class="chapter-link" href={rabbit}>C03 RabbitMQ</a>。</p>
+        <div class="meta">
+          <div><span class="n">03</span><span class="l">Topics</span></div>
+          <div><span class="n">分区</span><span class="l">并行上限</span></div>
+          <div><span class="n">acks</span><span class="l">0 / 1 / all</span></div>
+          <div><span class="n">位点</span><span class="l">处理之后</span></div>
+        </div>
+      </div>
+
+      <section class="article" id="group">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="基础 · 日志" /></div>
+        <h3>主题拆成多条只追加的分区</h3>
+        <p class="lead">一个主题是一类消息，例如订单。主题分成若干分区，每个分区是一条只追加的日志。消息写进某个分区后得到一个递增的 offset，这个数字只在该分区里有意义。同一条消息的 key 会进同一个分区，所以同一个订单的事件在这个分区里保持顺序。没有 key 时，生产者轮流写各个分区。</p>
+        <p class="lead">每个分区有一个 leader 和若干 follower。生产者和消费者都找 leader。follower 把 leader 的日志复制过去。ISR 是「已经追上」的那一组副本。<kbd>acks=all</kbd> 等的是当前 ISR，不是历史上每一个曾经存在的副本。leader 挂了，就从 ISR 里选一个新的 leader。</p>
+        <p class="lead">消费组用同一个 <kbd>group.id</kbd> 分享这个主题：一个分区在同一时刻只分给组里的一个成员，所以组里的并行度到分区数为止。成员比分区多，多出来的人空闲。另一个 <kbd>group.id</kbd> 会再读一份完整的日志，这是发布订阅。成员加入或离开时发生再均衡，分区被重新划分，这段时间组里会暂停拉取。</p>
+        <p class="lead">下面按 Range 把分区切给排好序的成员。4 个分区、2 个消费者，每人两条。2 个分区、3 个消费者，第三个人的列表是空的。</p>
+        <CodeBlock code={consumerGroup} lang="python" file="consumer_group.py" src={src('consumer_group.py')} />
+        <Interview q="为什么吞吐高？">
+          <p>写入是分区上的顺序追加，磁盘顺序写。热的那一段留在操作系统的页缓存里，读的时候常常不碰磁盘。broker 把日志用 sendfile 交给网卡，少一次从内核到用户态的拷贝。生产者把多条收成一批再压缩，网络上走的是一批。不同分区可以同时被不同消费者读。分区加到和消费者一样多就够了，再加只会增加打开的文件、再均衡时间和副本流量。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="batch">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="mid" text="教程 · 生产者" /></div>
+        <h3>攒一批再发，并写明要等几个副本</h3>
+        <p class="lead">每条消息单独等一次确认，吞吐会耗在往返上。<kbd>linger.ms</kbd> 让生产者最多再等这么久，把期间的消息和已经凑到的 <kbd>batch.size</kbd> 打成一批。时间先到或者字节先满，都会把这批发出去。压缩类型设在这批上，lz4 或 zstd 才会省下可观的字节；一条一条压缩几乎没有收益。</p>
+        <p class="lead"><kbd>acks=0</kbd> 表示发出去就继续，leader 是否写入调用方不知道。<kbd>acks=1</kbd> 等 leader 写入，follower 还没跟上时 leader 若宕机，这几条可能不在新 leader 上。<kbd>acks=all</kbd> 等 ISR 都写入。可以接受丢掉尚未复制的最后几条时，用 <kbd>acks=1</kbd> 并把 <kbd>linger.ms</kbd> 调到几十毫秒。已经确认的消息不能丢时，用 <kbd>acks=all</kbd>，并打开 <kbd>enable.idempotence</kbd>。幂等生产者给每个分区带上序列号，网络重试不会在这个分区里写出两条一样的记录。它要求 <kbd>acks=all</kbd>，<kbd>max.in.flight.requests.per.connection</kbd> 可以大于 1，常见是 5。</p>
+        <p class="lead">broker 一侧把内存留给页缓存。堆开得太大，顺序读反而要重新从磁盘取。客户端下面这份配置是 confluent-kafka 的键。文件直接运行只检查这些键，<kbd>send_order</kbd> 才需要本机的 bootstrap 地址。</p>
+        <CodeBlock code={producerClient} lang="python" file="producer_client.py" src={src('producer_client.py')} />
+        <p class="lead">把「一批算一次写入」和「acks 等几个副本」抽出来之后是这样：10 条消息、<kbd>batch_size</kbd> 为 5，写入次数是 2；为 1 则是 10。<kbd>acks=0</kbd> 时 follower 仍是空的。<kbd>acks=all</kbd> 且有 3 个副本时，三份日志都有这条消息。</p>
+        <CodeBlock code={batchAcks} lang="python" file="batch_acks.py" src={src('batch_acks.py')} />
+        <Interview q="幂等生产者解决了什么，没解决什么？">
+          <p>它解决的是生产者重试造成的分区内重复：同一条在网络上发了两次，分区里只留一条，顺序也不乱。它不保证业务只处理一次。消费者还是可能在提交位点之前崩溃，下一次再读到它。跨分区、跨会话的「只生效一次」要事务生产者，并且下游用 <kbd>read_committed</kbd> 来读。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="commit">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="mid" text="教程 · 消费者" /></div>
+        <h3>处理完再提交，一个线程只 poll 一个消费者</h3>
+        <p class="lead">消费者循环做三件事：<kbd>poll</kbd> 拿出一轮消息，交给业务，成功后再提交位点。位点是「这个分区下一回从哪读」。自动提交可能发生在业务完成之前，进程随即崩溃，这条消息不会再来。所以把 <kbd>enable.auto.commit</kbd> 关掉，在处理函数返回之后 <kbd>commit</kbd>。</p>
+        <p class="lead"><kbd>max.poll.interval.ms</kbd> 是两轮 <kbd>poll</kbd> 之间允许的最长时间。业务比它还慢，组协调者会认为这个成员已经离开，把它的分区分给别人，它再 <kbd>poll</kbd> 就会发现自己被踢出组。把间隔调到盖住最慢的一轮，或者减少 <kbd>max.poll.records</kbd>，让每一轮少拿一些。<kbd>fetch.min.bytes</kbd> 让 broker 尽量攒够再返回，避免一次拉取只有几条。</p>
+        <p class="lead">同一个消费者对象不是线程安全的，不要几个线程一起 <kbd>poll</kbd>。要并行，先增加分区，再把同组的消费者加到同样的数量。多出来的进程分不到分区，加上去也不会更快。一个分区内部也可以把这一轮记录交给线程池，但提交必须停在连续完成的那个水位：0 和 2 都做完、1 还在做，位点只能停在 1 前面。把 2 提交了，1 就会被跳过。</p>
+        <CodeBlock code={consumerClient} lang="python" file="consumer_client.py" src={src('consumer_client.py')} />
+        <p class="lead">位点模型把崩溃放在提交前和提交后各一次。处理了 <kbd>a</kbd> 但没提交，重启又读到 <kbd>a</kbd>，这是至少一次。提交之后再崩溃，下一条才是 <kbd>b</kbd>。水位函数对应上面的并发提交。</p>
+        <CodeBlock code={manualCommit} lang="python" file="manual_commit.py" src={src('manual_commit.py')} />
+        <Idea>
+          <ol class="steps">
+            <li>吞吐优先、允许丢最后几条：生产者 <kbd>acks=1</kbd>，<kbd>linger.ms</kbd> 几十毫秒，lz4，分区数等于消费者数。</li>
+            <li>确认过的不能丢：<kbd>acks=all</kbd>，幂等生产者，消费者手动提交，业务按 key 去重。</li>
+            <li>再均衡期间处理会停。成员数和分区数保持接近，避免频繁扩缩把分区搬来搬去。</li>
+          </ol>
+        </Idea>
+        <Interview q="加线程和加分区，先做哪一个？">
+          <p>先看分区数。组内能同时读的消费者个数等于分区数，所以先把分区加到期望的并行度，再部署同样数量的消费者进程，每个进程一个消费者线程。在一个分区里用线程池处理这一轮记录可以，提交的位点必须是连续完成的水位。至少一次仍会把同一条再交出来，幂等放在业务写入里，见 RabbitMQ 那一章的收件箱。</p>
+        </Interview>
+      </section>
+    </main>
+  </div>
+</BaseLayout>
+
+<style>
+  .chapter-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+  p.lead + p.lead { margin-top: 12px; }
+</style>

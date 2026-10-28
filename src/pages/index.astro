@@ -1,6 +1,6 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
-import { agentChapters, algoChapters, categoryConfig, frameworkChapters, pythonChapters } from '../data/topics';
+import { agentChapters, algoChapters, categoryConfig, componentChapters, frameworkChapters, pythonChapters } from '../data/topics';
 import { withBase } from '../lib/url';
 ---
 <BaseLayout title="算法、Python 与 Agent 学习手记 · Interview Notes">
@@ -13,6 +13,7 @@ import { withBase } from '../lib/url';
         <div><span class="n">{algoChapters.length}</span><span class="l">Algorithms</span></div>
         <div><span class="n">{pythonChapters.length}</span><span class="l">Python</span></div>
         <div><span class="n">{frameworkChapters.length}</span><span class="l">Frameworks</span></div>
+        <div><span class="n">{componentChapters.length}</span><span class="l">Components</span></div>
         <div><span class="n">{agentChapters.length}</span><span class="l">Agent</span></div>
         <div><span class="n">动画</span><span class="l">Visual</span></div>
         <div><span class="n">开源</span><span class="l">Open Source</span></div>

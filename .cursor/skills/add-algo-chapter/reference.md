@@ -126,6 +126,8 @@ Body: hero + one `<section>` per topic.
 </BaseLayout>
 ```
 
+The skeleton above is for an algorithm chapter. A tutorial section (框架、组件、库、Agent 框架) uses several `<p class="lead">` paragraphs, then a `CodeBlock`, and may add another paragraph plus another `CodeBlock` before `<Interview>`. Do not stop at one sentence and one file. See `src/pages/component/redis.astro`.
+
 ## 5. README source-location table
 
 Add under the existing "## 源码位置" section (in the repo root `README.md`):

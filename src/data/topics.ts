@@ -2,7 +2,7 @@
 
 export type Difficulty = 'base' | 'easy' | 'mid' | 'hard';
 
-export const categoryKeys = ['algo', 'python', 'framework', 'agent'] as const;
+export const categoryKeys = ['algo', 'python', 'framework', 'component', 'agent'] as const;
 export type Category = (typeof categoryKeys)[number];
 
 export interface Section {
@@ -15,7 +15,7 @@ export interface Section {
 
 export interface Chapter {
   slug: string;      // 路由由 categoryConfig 中的 routePrefix 统一决定
-  category: Category; // 归属板块：算法 / Python 基础 / Python 框架 / Agent
+  category: Category; // 归属板块：算法 / Python 基础 / Python 框架 / 组件 / Agent
   num: string;       // 章节序号
   cn: string;        // 中文名
   en: string;        // 英文名
@@ -144,6 +144,22 @@ export const chapters: Chapter[] = [
       { id: 'rate-limiter', num: '03', label: '异步限流器' },
       { id: 'async-pool', num: '04', label: '异步并发池' },
       { id: 'tool-loop', num: '05', label: '简易 tool-calling loop' },
+    ],
+  },
+  {
+    slug: 'stdlib-types',
+    category: 'python',
+    num: 'P08',
+    cn: '架构里的标准库类型',
+    en: 'Stdlib Types',
+    summary: '用 Protocol、Literal、TypedDict、collections.abc 和 dataclass 描述端口、配置和值对象。标准库即可，Python 3.11+。',
+    ready: true,
+    sections: [
+      { id: 'protocol', num: '01', label: 'Protocol 与 ABC' },
+      { id: 'literal', num: '02', label: 'Literal 与 Enum' },
+      { id: 'typed-dict', num: '03', label: 'TypedDict' },
+      { id: 'abc', num: '04', label: 'collections.abc' },
+      { id: 'dataclass', num: '05', label: 'dataclass' },
     ],
   },
 
@@ -349,6 +365,68 @@ export const chapters: Chapter[] = [
       { id: 'workflow', num: '07', label: 'Workflow 两步' },
     ],
   },
+  {
+    slug: 'deepagents',
+    category: 'agent',
+    num: 'A08',
+    cn: 'Deep Agents 核心用法',
+    en: 'Deep Agents',
+    summary: 'create_deep_agent 在 LangGraph 上带上虚拟文件、路径权限、子代理、跨线程记忆，以及写文件前的人工审批。脚本模型，不调用真实 API。',
+    ready: true,
+    sections: [
+      { id: 'harness', num: '01', label: '套在图上的能力' },
+      { id: 'files', num: '02', label: '虚拟文件系统' },
+      { id: 'permissions', num: '03', label: '路径权限' },
+      { id: 'subagent', num: '04', label: '子代理 task' },
+      { id: 'memory', num: '05', label: '跨线程记忆' },
+      { id: 'approval', num: '06', label: '写之前先审批' },
+    ],
+  },
+
+  // ===== 组件板块 =====
+  {
+    slug: 'redis',
+    category: 'component',
+    num: 'C01',
+    cn: 'Redis',
+    en: 'Redis',
+    summary: '从键、过期和五种结构写起，再写 SET NX PX 分布式锁，以及旁路缓存怎么对付穿透、击穿和雪崩。',
+    ready: true,
+    sections: [
+      { id: 'keys', num: '01', label: '键、过期与管道' },
+      { id: 'types', num: '02', label: '五种结构' },
+      { id: 'lock', num: '03', label: '分布式锁' },
+      { id: 'cache', num: '04', label: '旁路缓存' },
+    ],
+  },
+  {
+    slug: 'kafka',
+    category: 'component',
+    num: 'C02',
+    cn: 'Kafka',
+    en: 'Kafka',
+    summary: '分区、副本和消费组怎么配合，生产者靠批量与 acks 提高吞吐，消费者处理完再提交位点。',
+    ready: true,
+    sections: [
+      { id: 'group', num: '01', label: '分区、副本、消费组' },
+      { id: 'batch', num: '02', label: '生产者与高吞吐' },
+      { id: 'commit', num: '03', label: '消费、位点与并发' },
+    ],
+  },
+  {
+    slug: 'rabbitmq',
+    category: 'component',
+    num: 'C03',
+    cn: 'RabbitMQ',
+    en: 'RabbitMQ',
+    summary: '连接、通道和三种交换机，发布确认与手动 ack 怎么保住消息，再用 message_id、死信和 prefetch 处理重复与堆积。',
+    ready: true,
+    sections: [
+      { id: 'route', num: '01', label: '连接、通道、交换机' },
+      { id: 'ack', num: '02', label: '确认与不丢' },
+      { id: 'idem', num: '03', label: '幂等、死信、prefetch' },
+    ],
+  },
 ];
 
 export const readyChapters = chapters.filter((c) => c.ready);
@@ -358,6 +436,7 @@ export const soonChapters = chapters.filter((c) => !c.ready);
 export const algoChapters = chapters.filter((c) => c.category === 'algo');
 export const pythonChapters = chapters.filter((c) => c.category === 'python');
 export const frameworkChapters = chapters.filter((c) => c.category === 'framework');
+export const componentChapters = chapters.filter((c) => c.category === 'component');
 export const agentChapters = chapters.filter((c) => c.category === 'agent');
 
 interface CategoryConfig {
@@ -386,6 +465,12 @@ export const categoryConfig: CategoryConfig[] = [
     label: { cn: 'Python 框架', en: 'Python Frameworks' },
     routePrefix: '/framework',
     chapters: frameworkChapters,
+  },
+  {
+    key: 'component',
+    label: { cn: '组件', en: 'Components' },
+    routePrefix: '/component',
+    chapters: componentChapters,
   },
   {
     key: 'agent',

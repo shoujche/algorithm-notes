@@ -1,0 +1,117 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import Interview from '../../components/Interview.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import { chapters } from '../../data/topics';
+import { CODE_DIR, cacheAside, connectKv, distLock, structures } from '../../data/redis-code';
+import { ghBlob } from '../../lib/github';
+import { withBase } from '../../lib/url';
+
+const chapter = chapters.find((item) => item.slug === 'redis')!;
+const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
+const libs = withBase('/framework/libraries');
+const kafka = withBase('/component/kafka');
+---
+<BaseLayout title="Redis · 组件 · 算法、Python 与 Agent 学习手记" active="component">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">组件 / {chapter.num} · Redis</span>
+        <h2>命令在服务端做完，<em>再谈锁和缓存</em></h2>
+        <p>Redis 把数据放在内存里，用一条线程按顺序执行命令。客户端看到的是键和命令，不是一张张表。这一章按使用顺序写：先会写键和过期，再按场景选结构，然后实现一把会过期的锁，最后把缓存放回数据库旁边。示例是 redis-py。带断言的文件用 fakeredis 在进程里执行同一批命令；连真实实例时只从 <kbd>REDIS_URL</kbd> 读地址。框架里怎么接缓存见 <a class="chapter-link" href={libs}>F04</a>。需要分区和消费确认时看 <a class="chapter-link" href={kafka}>C02 Kafka</a>。</p>
+        <div class="meta">
+          <div><span class="n">04</span><span class="l">Topics</span></div>
+          <div><span class="n">五种结构</span><span class="l">命令</span></div>
+          <div><span class="n">SET NX PX</span><span class="l">加锁</span></div>
+          <div><span class="n">旁路缓存</span><span class="l">回源</span></div>
+        </div>
+      </div>
+
+      <section class="article" id="keys">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="基础 · 键" /></div>
+        <h3>一个键，一条命令，一次往返</h3>
+        <p class="lead">所有值都挂在键上。键名自己加前缀，例如 <kbd>page:redis:title</kbd>，这样过期、删除和迁移都能按前缀处理。<kbd>SET</kbd> 可以带 <kbd>EX</kbd>，秒数和写入在同一条命令里。到期之后 <kbd>GET</kbd> 得到空。<kbd>TTL</kbd> 看还剩多少秒，<kbd>-1</kbd> 表示没有过期时间，<kbd>-2</kbd> 表示键已经不在。</p>
+        <p class="lead"><kbd>INCR</kbd> 在服务端把整数加一。两个进程同时加，结果仍是连续的，因为命令一条一条执行。计数器、简单限流窗口都用它。不要先 <kbd>GET</kbd> 再在 Python 里加一再 <kbd>SET</kbd>，那两步之间别人的命令会插进来。</p>
+        <p class="lead">管道把多条命令装进一次网络往返，服务端仍按顺序逐条执行，别人的命令仍可能插在这批中间。它省的是往返时间。<kbd>MULTI</kbd> / <kbd>EXEC</kbd> 才是事务：这批命令连着执行，中间不插入别人的命令。某条命令报错时，其余命令不会自动撤销，所以它没有数据库那种回滚。</p>
+        <CodeBlock code={connectKv} lang="python" file="connect_kv.py" src={src('connect_kv.py')} />
+        <Interview q="RDB 和 AOF 各丢得起什么？">
+          <p><kbd>RDB</kbd> 隔一段时间做一份快照，恢复时直接加载这份文件，两次快照之间的写入不在文件里。<kbd>AOF</kbd> 把写命令追加到日志里，<kbd>appendfsync everysec</kbd> 通常只丢一秒以内的命令，文件会越来越大，需要重写。<kbd>bgsave</kbd> 和重写都是在子进程里做，利用写时复制，不要在主线程里做全量持久化。两个都开时，重启优先用 AOF 把命令重放回来。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="types">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="base" text="基础 · 结构" /></div>
+        <h3>让命令在服务端完成，不要把结构整份拉回来</h3>
+        <p class="lead">字符串适合缓存一段文本、一个计数。对象有多个字段、又常常只改其中一个时用哈希：<kbd>HSET</kbd> 改城市，不必重写整个用户。最近浏览用列表，<kbd>LPUSH</kbd> 把新的放在左边，<kbd>LTRIM</kbd> 只留最近 100 条。这种列表可以丢，不能拿来做必须确认的任务队列。</p>
+        <p class="lead">标签、点赞这种「有没有」用集合。<kbd>SADD</kbd> 重复成员只会留一份，<kbd>SISMEMBER</kbd> 在服务端判断，不用把集合取回 Python。<kbd>SCARD</kbd> 是成员个数。排行榜用有序集合：每个成员一个分数，<kbd>ZREVRANGE</kbd> 按分数从高到低取，<kbd>ZRANGEBYSCORE</kbd> 取一个分数段。分数更新用一次 <kbd>ZADD</kbd>，不要自己维护一份排好序的列表。</p>
+        <table class="cmp">
+          <thead>
+            <tr><th>结构</th><th>典型命令</th><th>放什么</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>字符串</td><td><kbd>SET</kbd> <kbd>GET</kbd> <kbd>INCR</kbd></td><td>缓存正文、计数、锁</td></tr>
+            <tr><td>哈希</td><td><kbd>HSET</kbd> <kbd>HGET</kbd> <kbd>HGETALL</kbd></td><td>一个对象的多个字段</td></tr>
+            <tr><td>列表</td><td><kbd>LPUSH</kbd> <kbd>LRANGE</kbd> <kbd>LTRIM</kbd></td><td>最近 N 条，按插入顺序</td></tr>
+            <tr><td>集合</td><td><kbd>SADD</kbd> <kbd>SISMEMBER</kbd> <kbd>SCARD</kbd></td><td>去重、是否存在</td></tr>
+            <tr><td>有序集合</td><td><kbd>ZADD</kbd> <kbd>ZREVRANGE</kbd> <kbd>ZRANGEBYSCORE</kbd></td><td>排行榜、按分数取一段</td></tr>
+          </tbody>
+        </table>
+        <CodeBlock code={structures} lang="python" file="structures.py" src={src('structures.py')} />
+        <Interview q="缓存和数据库不一致时，先动哪一边？">
+          <p>先写数据库，成功后再删除缓存。先删缓存再写数据库，中间会有一次读把旧值填回去。写完数据库再更新缓存，两个写请求完成的顺序可能和发起顺序相反，缓存留下旧值。删除让下一次读重新装载。删除本身也可能失败，所以删除要重试，或者订阅数据库的变更再删一次。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="lock">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="mid" text="面试 · 分布式锁" /></div>
+        <h3>加锁是一条 SET，解锁是一段核对 token 的 Lua</h3>
+        <p class="lead">多台机器要互斥同一段工作时，在 Redis 里放一把锁。本地的 <kbd>threading.Lock</kbd> 只挡住本进程。锁的键是资源，例如 <kbd>lock:order:42</kbd>。值必须是这次持有者自己的随机 token，用来在解锁时证明「还是我」。过期时间是持有者死掉之后的安全阀，时间到了键自己消失，别人才能再拿。</p>
+        <p class="lead">加锁用一条命令：<kbd>SET key token NX PX 30000</kbd>。<kbd>NX</kbd> 表示没有这把锁才写入，<kbd>PX</kbd> 把 30 秒过期放进同一次写入。旧写法先 <kbd>SETNX</kbd> 再 <kbd>EXPIRE</kbd>，进程死在两条命令之间，锁就永远不过期。</p>
+        <p class="lead">解锁不能直接 <kbd>DEL</kbd>。锁可能已经过期，并且被别人加上，此时删除的是别人的锁。正确的做法是一段 Lua：先 <kbd>GET</kbd>，值仍是自己的 token 才 <kbd>DEL</kbd>。Lua 在 Redis 里原子执行，比较和删除之间不会插入别人的命令。续期同样要先核对 token，再 <kbd>PEXPIRE</kbd>。业务做完必须停止续期，否则过期时间被一直推后，故障的持有者看起来还活着。</p>
+        <Idea>
+          <ol class="steps">
+            <li>过期时间要盖住正常的临界区。临界区可能超过这段时间，就在持有期间续期。</li>
+            <li>主从异步复制时，主机写入后、从机还没收到复制就当选，另一边可以再拿到同一把锁。两个持有者会同时存在。</li>
+            <li>不能接受两个持有者时，用 etcd、ZooKeeper 或数据库里的唯一行。Redlock 不能消除时钟跳变和进程长时间停顿造成的重叠。</li>
+            <li>redis-py 的 <kbd>Lock</kbd> 就是这套 <kbd>SET NX PX</kbd> 和 Lua。<kbd>blocking_timeout=0</kbd> 表示拿不到立刻返回。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={distLock} lang="python" file="dist_lock.py" src={src('dist_lock.py')} />
+        <Interview q="为什么比较和删除必须写在同一段 Lua 里？">
+          <p>先 <kbd>GET</kbd> 看到是自己的 token，再发第二条 <kbd>DEL</kbd>。两条命令之间锁可能刚好过期，新的持有者已经写入。这时 <kbd>DEL</kbd> 删掉的是新锁。Lua 让读取、比较、删除成为一次执行。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="cache">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="面试 · 缓存" /></div>
+        <h3>旁路缓存：先读缓存，没有再读数据库</h3>
+        <p class="lead">读路径不把数据库的查询藏进 Redis 的命令里。应用先 <kbd>GET</kbd>。命中就返回。未命中就查数据库，再 <kbd>SET</kbd> 回去，并带上过期时间。写路径改的是数据库，成功后删除缓存键，让下一次读重新装载。这就是旁路缓存。</p>
+        <p class="lead">穿透是客户端一直查一个数据库里没有的 id。缓存里永远没有这个键，每次都打到数据库。处理是把「没有」也缓存一小段时间，下一次 <kbd>GET</kbd> 看到这个空值就直接返回。键空间极大、空值也存不下时，在缓存前面放布隆过滤器：它说没有，就不必再查。</p>
+        <p class="lead">击穿是一个热点键刚好过期，大量请求同时发现缓存是空的，一起去查数据库。空值解决不了，因为值是存在的，只是这一刻不在缓存里。<kbd>SET NX</kbd> 只能让先写完的人留下值，两边的查询都已经发生。要只让一个人去装载，就把装载放进上一节的锁里。没拿到锁的请求再读一次缓存，读不到就稍后重试。</p>
+        <p class="lead">雪崩是很多键在同一秒过期，或者缓存进程重启后是空的，回源同时打满数据库。过期时间用一个基数加上一小段抖动，让它们错开。缓存重启时对回源做限流，数据库才接得住。</p>
+        <CodeBlock code={cacheAside} lang="python" file="cache_aside.py" src={src('cache_aside.py')} />
+        <Interview q="三种失效各自挡在哪一步？">
+          <p>穿透挡的是「数据库也没有」的读，在回填时写入空值，或在更前面用布隆过滤器挡住。击穿挡的是「一个热点同时失效」，用锁或逻辑过期把装载收成一个请求。雪崩挡的是「许多键一起失效」，过期时间加抖动，重启后的回源要限流。三种可以同时出现，所以空值、锁和抖动是三件分开的事。</p>
+        </Interview>
+      </section>
+    </main>
+  </div>
+</BaseLayout>
+
+<style>
+  .chapter-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+  p.lead + p.lead { margin-top: 12px; }
+  table.cmp { width: 100%; border-collapse: collapse; margin: 14px 0 4px; font-size: 14px;
+    display: block; overflow-x: auto; }
+  table.cmp th, table.cmp td { text-align: left; padding: 9px 12px;
+    border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.cmp th { font-family: var(--font-mono); font-size: 10.5px; font-weight: 600;
+    letter-spacing: 0.4px; color: var(--muted); white-space: nowrap; }
+  table.cmp td { color: var(--graphite); }
+  table.cmp td:first-child { color: var(--ink); white-space: nowrap; }
+  table.cmp tbody tr:last-child td { border-bottom: none; }
+</style>

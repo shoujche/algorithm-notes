@@ -1,0 +1,123 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import Interview from '../../components/Interview.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import { chapters } from '../../data/topics';
+import {
+  CODE_DIR,
+  collectionsAbc,
+  dataclassModel,
+  literalAlias,
+  protocolPort,
+  typedDictShape,
+} from '../../data/stdlib-types-code';
+import { ghBlob } from '../../lib/github';
+import { withBase } from '../../lib/url';
+
+const chapter = chapters.find((item) => item.slug === 'stdlib-types')!;
+const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
+const duck = withBase('/python/py-basics#duck-typing');
+---
+<BaseLayout title="架构里的标准库类型 · Python · 算法、Python 与 Agent 学习手记" active="python">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">Python / {chapter.num} · 标准库类型</span>
+        <h2>先把<em>端口和数据结构</em>写清楚</h2>
+        <p>项目分层时，标准库已经够用：<kbd>Protocol</kbd> 描述依赖，<kbd>Literal</kbd> 和 <kbd>Enum</kbd> 收住取值，<kbd>TypedDict</kbd> 描述一份字典，<kbd>collections.abc</kbd> 标出函数只读还是要等待，<kbd>dataclass</kbd> 做值对象。这些注解主要给类型检查器看，运行时行为写在每个文件的断言里。需要 Python 3.11+。鸭子类型的入门在 <a class="chapter-link" href={duck}>P01</a>。</p>
+        <div class="meta">
+          <div><span class="n">05</span><span class="l">Topics</span></div>
+          <div><span class="n">Protocol</span><span class="l">端口</span></div>
+          <div><span class="n">abc</span><span class="l">容器</span></div>
+          <div><span class="n">标准库</span><span class="l">可本地跑</span></div>
+        </div>
+      </div>
+
+      <section class="article" id="protocol">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="基础 · Protocol" /></div>
+        <h3>依赖看方法，基类才要求继承</h3>
+        <p class="lead"><kbd>Clock</kbd> 是 <kbd>Protocol</kbd>。<kbd>SystemClock</kbd> 和 <kbd>FrozenClock</kbd> 都没有继承它，只要有 <kbd>now()</kbd> 就能传给 <kbd>stamp_note</kbd>。<kbd>Store</kbd> 是 <kbd>ABC</kbd>，子类必须实现 <kbd>save</kbd>，直接 <kbd>Store()</kbd> 会在实例化时抛 <kbd>TypeError</kbd>。</p>
+        <table class="cmp">
+          <thead>
+            <tr><th></th><th>Protocol</th><th>ABC</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>匹配方式</td><td>有对应方法即可</td><td>必须继承</td></tr>
+            <tr><td>适合放哪</td><td>你不拥有的实现，例如时钟、第三方客户端</td><td>这一层自己的基类，要共享实现或强制子类补方法</td></tr>
+            <tr><td>运行时</td><td>默认只存在于类型检查；加上 <kbd>runtime_checkable</kbd> 后 <kbd>isinstance</kbd> 只看方法在不在</td><td><kbd>isinstance</kbd> 看继承关系，缺抽象方法不能实例化</td></tr>
+          </tbody>
+        </table>
+        <CodeBlock code={protocolPort} lang="python" file="protocol_port.py" src={src('protocol_port.py')} />
+        <p class="cue"><span class="t">记忆提示</span><kbd>Bag</kbd> 能传给 <kbd>Saver</kbd>，<kbd>isinstance(bag, Store)</kbd> 是假。两种写法可以同时存在：端口用 Protocol，这一层自己的对象用 ABC。</p>
+        <Interview q="runtime_checkable 能代替类型检查吗？">
+          <p>不能。<kbd>isinstance</kbd> 只确认方法名在类上，不看参数和返回值。签名对不对，交给类型检查器。运行时的门禁用 ABC，或者在边界上自己校验值。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="literal">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="mid" text="核心 · Literal" /></div>
+        <h3>允许的字符串，和真正的枚举</h3>
+        <p class="lead"><kbd>Mode</kbd> 是 <kbd>Literal["read", "write"]</kbd> 的别名。<kbd>Final</kbd> 标出不打算再改的默认值。<kbd>Handler</kbd> 把 <kbd>Callable[[str], str]</kbd> 收成一个名字。类型检查器会拒绝 <kbd>"delete"</kbd>，运行中的字符串仍要靠 <kbd>get_args</kbd> 判断。</p>
+        <Idea>
+          <ol class="steps">
+            <li><kbd>Literal</kbd> 适合 JSON、配置、查询参数里本来就是字符串的字段。</li>
+            <li><kbd>Enum</kbd> 的成员是对象，<kbd>ModeEnum("write")</kbd> 能从值找回成员，列表也能遍历。</li>
+            <li>对外的字符串在边界上收成 <kbd>Mode</kbd> 或 <kbd>ModeEnum</kbd>，里面的函数只接收收口后的类型。</li>
+          </ol>
+        </Idea>
+        <CodeBlock code={literalAlias} lang="python" file="literal_alias.py" src={src('literal_alias.py')} />
+      </section>
+
+      <section class="article" id="typed-dict">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="mid" text="核心 · TypedDict" /></div>
+        <h3>字典还是字典，键先写明</h3>
+        <p class="lead"><kbd>Job</kbd> 在运行时就是普通 <kbd>dict</kbd>。<kbd>name</kbd> 必填，<kbd>retries</kbd> 标了 <kbd>NotRequired</kbd>，缺省时函数自己给 1。<kbd>Annotated[str, "uuid"]</kbd> 的第一项仍是 <kbd>str</kbd>，<kbd>"uuid"</kbd> 要 <kbd>include_extras=True</kbd> 才读得到。</p>
+        <CodeBlock code={typedDictShape} lang="python" file="typed_dict_shape.py" src={src('typed_dict_shape.py')} />
+        <Interview q="配置用 TypedDict 还是 dataclass？">
+          <p>数据本来就是字典，例如 JSON、函数返回的一包键值，用 <kbd>TypedDict</kbd>，调用方继续用 <kbd>job["name"]</kbd>。需要方法和不可变更新时用下一节的 <kbd>dataclass</kbd>。两者都只在类型检查阶段约束形状，解析外部输入时仍要校验。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="abc">
+        <div class="art-head"><span class="num">04</span><LcBadge kind="mid" text="核心 · collections.abc" /></div>
+        <h3>按用法标注，而不是按具体容器</h3>
+        <p class="lead">只求和、只查找时，参数写成 <kbd>Sequence</kbd> 和 <kbd>Mapping</kbd>，<kbd>list</kbd> 与 <kbd>tuple</kbd>、普通 <kbd>dict</kbd> 都能传入。<kbd>Callable</kbd> 表示一个可调用对象。<kbd>async def</kbd> 的调用结果是协程，协程实现 <kbd>Awaitable</kbd>；<kbd>yield</kbd> 的异步函数实现 <kbd>AsyncIterator</kbd>，用 <kbd>async for</kbd> 取出。</p>
+        <CodeBlock code={collectionsAbc} lang="python" file="collections_abc.py" src={src('collections_abc.py')} />
+        <p class="cue"><span class="t">记忆提示</span>从 <kbd>collections.abc</kbd> 导入这些名字。<kbd>typing.List</kbd> 一类旧写法仍能用，新代码以这里为准。函数若会 <kbd>append</kbd>，再把参数收窄成 <kbd>list</kbd>。</p>
+      </section>
+
+      <section class="article" id="dataclass">
+        <div class="art-head"><span class="num">05</span><LcBadge kind="mid" text="核心 · dataclass" /></div>
+        <h3>值对象改字段时交出新实例</h3>
+        <p class="lead"><kbd>frozen=True</kbd> 的 <kbd>Note</kbd> 赋值会抛 <kbd>AttributeError</kbd>。<kbd>replace</kbd> 复制一份并改掉指定字段，原来的 <kbd>title</kbd> 还在。<kbd>slots=True</kbd> 去掉实例字典。<kbd>ClassVar</kbd> 属于类，<kbd>asdict</kbd> 不会把它带出去。<kbd>Draft.lines</kbd> 用 <kbd>field(default_factory=list)</kbd>，两个草稿不会共用同一个列表。</p>
+        <CodeBlock code={dataclassModel} lang="python" file="dataclass_model.py" src={src('dataclass_model.py')} />
+        <Interview q="为什么 tags 用 tuple，lines 用 list？">
+          <p><kbd>frozen</kbd> 挡的是字段重新赋值，挡不住可变对象内部的 <kbd>append</kbd>。值对象里放 <kbd>tuple</kbd>，改标签就 <kbd>replace</kbd> 出新笔记。草稿还要往里加行，字段用 <kbd>list</kbd>，并且每个实例用 <kbd>default_factory</kbd> 单独建表。</p>
+        </Interview>
+      </section>
+    </main>
+  </div>
+</BaseLayout>
+
+<style>
+  .chapter-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+
+  p.cue { margin: 18px 0 0; padding-left: 13px; border-left: 2px solid var(--teal);
+    font-size: 14.5px; color: var(--graphite); }
+  p.cue .t { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.4px;
+    color: var(--teal); margin-right: 8px; }
+
+  table.cmp { width: 100%; border-collapse: collapse; margin: 14px 0 4px; font-size: 14px;
+    display: block; overflow-x: auto; }
+  table.cmp th, table.cmp td { text-align: left; padding: 9px 12px;
+    border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.cmp th { font-family: var(--font-mono); font-size: 10.5px; font-weight: 600;
+    letter-spacing: 0.4px; color: var(--muted); white-space: nowrap; }
+  table.cmp td { color: var(--graphite); }
+  table.cmp td:first-child { color: var(--ink); white-space: nowrap; }
+  table.cmp tbody tr:last-child td { border-bottom: none; }
+</style>

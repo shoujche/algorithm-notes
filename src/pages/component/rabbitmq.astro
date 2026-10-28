@@ -1,0 +1,91 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Sidebar from '../../components/Sidebar.astro';
+import LcBadge from '../../components/LcBadge.astro';
+import Idea from '../../components/Idea.astro';
+import Interview from '../../components/Interview.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import { chapters } from '../../data/topics';
+import {
+  CODE_DIR,
+  confirmAck,
+  consumeClient,
+  exchangeRoute,
+  idempotentConsumer,
+  publishClient,
+} from '../../data/rabbitmq-code';
+import { ghBlob } from '../../lib/github';
+import { withBase } from '../../lib/url';
+
+const chapter = chapters.find((item) => item.slug === 'rabbitmq')!;
+const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
+const kafka = withBase('/component/kafka');
+---
+<BaseLayout title="RabbitMQ · 组件 · 算法、Python 与 Agent 学习手记" active="component">
+  <div class="layout">
+    <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
+    <main>
+      <div class="hero">
+        <span class="eyebrow">组件 / {chapter.num} · RabbitMQ</span>
+        <h2>消息先路由，再确认，<em>最后认得重复</em></h2>
+        <p>RabbitMQ 用交换机把一条消息送进一个或多个队列。生产者要等到代理确认接手，消费者要在业务成功之后再 ack。确认包丢掉、进程在 ack 前退出，都会把同一条再交出来，所以业务按 <kbd>message_id</kbd> 做幂等。pika 示例直接运行时不连接代理；路由、重投和收件箱各自有一个小模型把结果算出来。分区和位点见 <a class="chapter-link" href={kafka}>C02 Kafka</a>。</p>
+        <div class="meta">
+          <div><span class="n">03</span><span class="l">Topics</span></div>
+          <div><span class="n">交换机</span><span class="l">direct / topic / fanout</span></div>
+          <div><span class="n">confirm + ack</span><span class="l">至少一次</span></div>
+          <div><span class="n">prefetch</span><span class="l">未确认上限</span></div>
+        </div>
+      </div>
+
+      <section class="article" id="route">
+        <div class="art-head"><span class="num">01</span><LcBadge kind="base" text="基础 · 路由" /></div>
+        <h3>连接很贵，通道才是收发的单位</h3>
+        <p class="lead">应用先开一条 TCP 连接，再在连接上开通道。声明交换机、声明队列、发布、消费都发生在通道上。通道不是线程安全的，一个线程使用一个通道。连接的建立和心跳比开通道贵，所以一个进程复用少量连接，发布和消费可以分成两条连接，避免消费堵住发布。</p>
+        <p class="lead">交换机不存消息，它按绑定把消息送进队列。队列才保存还没被确认的消息。<kbd>direct</kbd> 要求路由键和绑定键完全相同，适合「订单已支付」这种固定事件。<kbd>topic</kbd> 用点分词：<kbd>*</kbd> 恰好一个词，<kbd>#</kbd> 是零个或多个词。<kbd>order.*</kbd> 能接住 <kbd>order.created</kbd>，接不住 <kbd>order.created.eu</kbd>；<kbd>order.#</kbd> 两个都接住。<kbd>fanout</kbd> 忽略路由键，每个绑定队列都收到一份，适合同一事件要通知多个系统。</p>
+        <p class="lead">下面是 pika 里把这些声明做完并发布一条持久化消息的写法。<kbd>mandatory=True</kbd> 时，没有任何队列接住这条消息，代理会把它退回给生产者，而不是悄悄丢掉。</p>
+        <CodeBlock code={publishClient} lang="python" file="publish_client.py" src={src('publish_client.py')} />
+        <p class="lead">匹配规则单独看：direct 只投给键相同的队列，topic 按词匹配，fanout 两个队列都有。</p>
+        <CodeBlock code={exchangeRoute} lang="python" file="exchange_route.py" src={src('exchange_route.py')} />
+      </section>
+
+      <section class="article" id="ack">
+        <div class="art-head"><span class="num">02</span><LcBadge kind="mid" text="教程 · 不丢" /></div>
+        <h3>代理接手是 confirm，业务做完是 ack</h3>
+        <p class="lead">消息要在代理重启后还在，队列声明为 durable，消息的 <kbd>delivery_mode</kbd> 设为 2。只做一边不够：内存队列里的持久化消息会随队列消失，持久化队列里的非持久化消息重启后也不在。发布侧再打开 confirm。确认的意思是：这条消息已经被路由到队列，并且该落盘的已经落盘。没收到确认就按同一个 <kbd>message_id</kbd> 重发。确认包如果在代理已经写入之后才在网络上丢掉，重发会让队列里出现两条。</p>
+        <p class="lead">消费侧关掉自动 ack。回调里先做业务，成功再 <kbd>basic_ack</kbd>。先 ack 再做业务，进程若在业务完成前退出，这条消息不会再来。还没 ack 就退出，代理把它重新放回队列，下一次带上 <kbd>redelivered</kbd>。这就是至少一次。<kbd>basic_nack</kbd> 且 <kbd>requeue=True</kbd> 会马上再投给消费者；处理不了的消息应该 <kbd>requeue=False</kbd>，让它进入死信交换机，而不是在原队列里打转。</p>
+        <p class="lead">需要副本时用 quorum queue。经典镜像队列的确认和选主跟 quorum 不是同一套，新的队列用 quorum。下面的模型把「写入之后才确认」和「没 ack 就带 redelivered 回来」单独跑了一遍。prefetch 为 1 时，上一条还没确认，下一条拉不出来。</p>
+        <CodeBlock code={confirmAck} lang="python" file="confirm_ack.py" src={src('confirm_ack.py')} />
+        <Interview q="怎样才算消息没丢？">
+          <p>生产者等到 confirm，说明 durable 队列已经接手这条持久化消息。消费者在业务成功之后 ack，没成功的还会重投。两段都做了，得到至少一次。恰好一次不是代理单独能给的：确认包丢失、消费者在 ack 前崩溃，都会再交来一次。业务侧要认得这是同一条。</p>
+        </Interview>
+      </section>
+
+      <section class="article" id="idem">
+        <div class="art-head"><span class="num">03</span><LcBadge kind="mid" text="教程 · 幂等与调优" /></div>
+        <h3>收件箱认得出第二遍，prefetch 限制手里的未确认消息</h3>
+        <p class="lead">幂等放在消费业务里，不放在通道上。每条消息带稳定的 <kbd>message_id</kbd>。处理时把它和业务写入放进同一个数据库事务：插入这张「已处理」表成功，业务才算发生；主键冲突就说明以前处理过，这次只 ack、不再改账。只在进程内存里记「见过」，重启之后就忘了，重复消息会再执行一次。</p>
+        <p class="lead"><kbd>basic_qos(prefetch_count)</kbd> 是这个通道上尚未 ack 的消息上限。设为 1，分配最均匀，消费者大部分时间在等下一轮网络。调到几十，消费者手头有一批可以做，吞吐上去。调得过大，一台慢消费者占着大量消息，内存也堆在客户端。0 表示不限制。全局的 prefetch 还要看有多少个消费者，总数大致是 <kbd>prefetch × 消费者数</kbd>。</p>
+        <p class="lead">死信用来接「处理失败且不再入队」的消息。队列参数 <kbd>x-dead-letter-exchange</kbd> 指向另一个交换机，那边再绑定一条专门人工或延迟重试的队列。下面的回调先看收件箱，业务抛错就 nack 且不重新入队，成功才把 id 记下来并 ack。</p>
+        <CodeBlock code={consumeClient} lang="python" file="consume_client.py" src={src('consume_client.py')} />
+        <p class="lead">把重投单独看一遍：第一次已经改了业务，ack 之前进程没了，第二次 <kbd>handle</kbd> 返回 duplicate，业务列表仍然只有一行。prefetch 为 2 时，第三条在前两条确认之前进不了消费者。</p>
+        <CodeBlock code={idempotentConsumer} lang="python" file="idempotent_consumer.py" src={src('idempotent_consumer.py')} />
+        <Idea>
+          <ol class="steps">
+            <li>不丢：durable 队列、delivery_mode 2、publisher confirm、手动 ack。</li>
+            <li>不重复生效：稳定的 message_id，和业务写入同一个数据库事务。</li>
+            <li>不堆积在一个慢消费者上：prefetch 从 16 或 32 起，按处理耗时再调；处理不了的进死信。</li>
+            <li>通道一线程一个。发布和消费分连接。副本用 quorum queue。</li>
+          </ol>
+        </Idea>
+        <Interview q="和 Kafka 的位点是同一类问题吗？prefetch 呢？">
+          <p>确认这一层是同一类。Kafka 在处理完后提交 offset，RabbitMQ 在处理完后 ack。失败或确认包丢失都会再投递，所以两边都要业务幂等。Kafka 多出来的是分区内顺序，以及并行度等于分区数。RabbitMQ 多出来的是交换机路由；并行靠多个消费者同时听一个队列，prefetch 决定每个消费者一次能拿走多少还没确认的消息。</p>
+        </Interview>
+      </section>
+    </main>
+  </div>
+</BaseLayout>
+
+<style>
+  .chapter-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+  p.lead + p.lead { margin-top: 12px; }
+</style>

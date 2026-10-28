@@ -62,6 +62,16 @@ npm run preview  # 本地预览构建结果
 
 > 网页上每个代码块右上角的文件名都可点击，会直接跳到上面对应的 GitHub 源文件。
 
+- Python 基础「架构里的标准库类型」章节源码：[`src/code/python/stdlib-types/`](https://github.com/shoujche/algorithm-notes/tree/main/src/code/python/stdlib-types)。每个文件可直接 `python xxx.py` 运行，只需 Python 3.11+ 标准库。
+
+| 文件 | 说明 |
+| --- | --- |
+| [`protocol_port.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/python/stdlib-types/protocol_port.py) | `Protocol` 按方法形状接依赖；`ABC` 要求继承 |
+| [`literal_alias.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/python/stdlib-types/literal_alias.py) | `Literal`、`Final`、`TypeAlias`，边界上用 `get_args`；`Enum` 自带成员 |
+| [`typed_dict_shape.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/python/stdlib-types/typed_dict_shape.py) | `TypedDict`、`NotRequired`、`Annotated` |
+| [`collections_abc.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/python/stdlib-types/collections_abc.py) | `Sequence`、`Mapping`、`Callable`、`Awaitable`、`AsyncIterator` |
+| [`dataclass_model.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/python/stdlib-types/dataclass_model.py) | `frozen` 值对象、`replace`、`field(default_factory=...)`、`ClassVar` |
+
 - Python 框架板块源码：[`src/code/framework/`](https://github.com/shoujche/algorithm-notes/tree/main/src/code/framework)。每个文件都是单文件脚本，直接 `python xxx.py` 运行（Django 用 `settings.configure()` + 内存 SQLite，不需要建项目）。
 - 四份长文档（核心用法 · 常用方法 · 教程 · 工程实践 · 面试题）：[`django.md`](https://github.com/shoujche/algorithm-notes/blob/main/docs/python-frameworks/django.md) · [`flask.md`](https://github.com/shoujche/algorithm-notes/blob/main/docs/python-frameworks/flask.md) · [`fastapi.md`](https://github.com/shoujche/algorithm-notes/blob/main/docs/python-frameworks/fastapi.md) · [`libraries.md`](https://github.com/shoujche/algorithm-notes/blob/main/docs/python-frameworks/libraries.md)
 
@@ -172,6 +182,35 @@ Agent 核心真题（A04）是问答页，没有单独源码文件。
 | [`metadata_filter.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/llamaindex/metadata_filter.py) | 向量相似度之外的 metadata 硬条件 |
 | [`ingestion.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/llamaindex/ingestion.py) | IngestionPipeline 把切块和向量写明 |
 | [`workflow_rag.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/llamaindex/workflow_rag.py) | Workflow 把检索和作答分成两步 |
+
+- 组件专题源码：[`src/code/component/`](https://github.com/shoujche/algorithm-notes/tree/main/src/code/component)。页面按教程写：先讲一个用法，再给对应的 Python。Redis 命令可用 fakeredis 在本地执行；Kafka / RabbitMQ 的客户端函数要有本机服务才发送，文件直接运行时只检查配置。
+
+| 文件 | 说明 |
+| --- | --- |
+| [`redis/connect_kv.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/component/redis/connect_kv.py) | `SET` 带过期、`INCR`、pipeline |
+| [`redis/structures.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/component/redis/structures.py) | 哈希、列表、集合、有序集合 |
+| [`redis/dist_lock.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/component/redis/dist_lock.py) | `SET key token NX PX`、Lua 解锁与续期 |
+| [`redis/cache_aside.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/component/redis/cache_aside.py) | 旁路缓存、空值、锁住装载、错开 TTL |
+| [`kafka/consumer_group.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/component/kafka/consumer_group.py) | 分区日志；消费组按 Range 分配，多出的消费者空闲 |
+| [`kafka/producer_client.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/component/kafka/producer_client.py) | `acks`、`linger.ms`、`batch.size`、压缩、幂等生产者 |
+| [`kafka/batch_acks.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/component/kafka/batch_acks.py) | 批量把多次发送收成少数写入；`acks` 等几个副本 |
+| [`kafka/consumer_client.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/component/kafka/consumer_client.py) | 关闭自动提交，处理完再 `commit` |
+| [`kafka/manual_commit.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/component/kafka/manual_commit.py) | 崩溃后从上次位点再读；并发只推进连续水位 |
+| [`rabbitmq/publish_client.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/component/rabbitmq/publish_client.py) | 连接、通道、声明、持久化与发布确认 |
+| [`rabbitmq/exchange_route.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/component/rabbitmq/exchange_route.py) | direct、topic（`*` / `#`）、fanout |
+| [`rabbitmq/confirm_ack.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/component/rabbitmq/confirm_ack.py) | 持久化后确认；未 ack 则带 `redelivered` 重投 |
+| [`rabbitmq/consume_client.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/component/rabbitmq/consume_client.py) | 手动 ack、prefetch、死信、按 `message_id` 去重 |
+| [`rabbitmq/idempotent_consumer.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/component/rabbitmq/idempotent_consumer.py) | 重投第二次只确认，业务列表仍是一行 |
+
+- Deep Agents 核心用法章节源码：[`src/code/agent/deepagents/`](https://github.com/shoujche/algorithm-notes/tree/main/src/code/agent/deepagents)
+
+| 文件 | 说明 |
+| --- | --- |
+| [`filesystem_notes.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/deepagents/filesystem_notes.py) | 脚本模型调用 write_file / read_file，文件留在当前线程状态 |
+| [`path_permissions.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/deepagents/path_permissions.py) | FilesystemPermission 按顺序匹配，拒绝 /private/** 的写入 |
+| [`subagent_task.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/deepagents/subagent_task.py) | task 子代理只把最终结论交回父代理 |
+| [`memory_store.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/deepagents/memory_store.py) | /memories/ 走 StoreBackend，换 thread_id 仍可读 |
+| [`approve_write.py`](https://github.com/shoujche/algorithm-notes/blob/main/src/code/agent/deepagents/approve_write.py) | interrupt_on 暂停 write_file，批准后同一条线程继续 |
 
 ## 新增章节
 

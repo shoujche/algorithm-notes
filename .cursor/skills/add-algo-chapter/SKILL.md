@@ -7,8 +7,10 @@ description: >-
   build a data-driven page with code tabs / diagrams / step animations, add
   GitHub source links, update the README source-location table, verify with a
   build + browser check, then WAIT for user review before pushing. Use when
-  the user asks to add a topic, chapter, data structure, or algorithm problems
-  (链表 / 二叉树 / 栈 / DP 等) to this notes site.
+  the user asks to add a topic, chapter, data structure, algorithm problems
+  (链表 / 二叉树 / 栈 / DP 等), or a tutorial (框架、组件、库、Agent 框架) to
+  this notes site. Tutorial chapters must explain the idea in prose and then
+  show the matching code block; a one-line lead plus one short demo is too thin.
 ---
 
 # Add a chapter to 算法手记 (Algo Notes)
@@ -49,6 +51,20 @@ See [reference.md](reference.md) for exact copy-paste templates (topics entry, m
 - **Language policy**: "basics" section = 4 languages via `CodeTabs` (Python, Java, Go, C++, Python first). Specific LeetCode problems = Python-only via `CodeBlock` (offer to add other languages after).
 - **Source files**: clean class/functions, Chinese comments, note complexity inline (e.g. `# 头部插入 O(1)`). Each language idiomatic (Go has `package` + tabs; C++ uses includes only if needed). Whole file is shown on the site — no hidden experiment regions unless the user asks.
 - **GitHub links**: use `ghBlob('src/code/<slug>/<file>')` from `src/lib/github.ts`. Pass `src=` to `CodeBlock` and `dir={CODE_DIR}` to `CodeTabs` — the filename in the code bar becomes a clickable source link (tabs update per active language).
+
+## Tutorial chapters (框架 / 组件 / 库 / Agent 框架)
+
+Algorithm chapters can stay a short lead plus one solution. Tutorial chapters cannot. The user rejected the first 组件 draft because each section was one sentence and one compact script.
+
+Write the page as a tutorial. Each section:
+
+1. Explain the idea in several paragraphs: what it is, when to use it, what the command or config actually does, and the failure mode.
+2. Then show the code block that illustrates that step. More than one block per section is normal: client usage first, then a smaller model of the rule if the client needs a live service.
+3. Put interview answers after the explanation, not instead of it.
+
+Code for a tutorial does not have to run against Redis, Kafka, RabbitMQ, or a model API. A readable client example is enough when the file says it is for reading and does not open a connection at import time. Addresses and passwords come from environment variables, never hardcoded. If a file can demonstrate the rule locally (fakeredis, an in-memory log), keep that as a second block, not as the whole section.
+
+Density reference: `src/pages/component/redis.astro`, `kafka.astro`, `rabbitmq.astro`. A section that only has `<p class="lead">` and one `CodeBlock` is not finished.
 
 ## Component quick reference
 
