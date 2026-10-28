@@ -14,12 +14,12 @@ import { sectionProblemUrl } from '../../lib/leetcode';
 const chapter = chapters.find((c) => c.slug === 'hands-on')!;
 const problem = (id: string) => sectionProblemUrl(chapter, id);
 ---
-<BaseLayout title="实战手撕 · Python 面试 · 算法与 Python 面试手记" active="python">
+<BaseLayout title="实战手撕">
   <div class="layout">
     <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
     <main>
       <div class="hero">
-        <span class="eyebrow">Python & Agent / {chapter.num} · 实战手撕</span>
+        <span class="eyebrow">面试 · 手撕 / {chapter.num} · 实战手撕</span>
         <h2>实战 <em>手撕</em>：<br />面试白板上要现写的那几道</h2>
         <p>这一章是纯手写代码题：计时/重试装饰器、O(1) 的 LRU 缓存、异步限流器、并发池、简易 tool-calling loop。每题都给面试官口吻的题面、思路要点与可直接运行的标准答案，末尾附高频追问。</p>
         <div class="meta">

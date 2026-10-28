@@ -32,7 +32,7 @@ const chapter = chapters.find((item) => item.slug === 'langgraph')!;
 const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
 const a01 = withBase('/agent/react-agent-loop');
 ---
-<BaseLayout title="LangGraph 核心用法 · Agent · 算法、Python 与 Agent 学习手记" active="agent">
+<BaseLayout title="LangGraph 核心用法">
   <div class="layout">
     <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
     <main>

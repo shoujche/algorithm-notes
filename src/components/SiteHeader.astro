@@ -1,22 +1,24 @@
 ---
 import { withBase } from '../lib/url';
 import { ghNewIssue, ghRepo } from '../lib/github';
-import { categoryConfig, type Category } from '../data/topics';
-interface Props { active?: Category }
-const { active } = Astro.props;
+import { SITE, boardOfSlug, boards } from '../data/topics';
+
+const slug = Astro.url.pathname.replace(/\/+$/, '').split('/').pop() ?? '';
+const active = boardOfSlug(slug);
 ---
 <header class="top">
   <a class="brand" href={withBase('/')}>
-    <div class="logo">AN</div>
+    <div class="logo">{SITE.logo}</div>
     <div>
-      <h1>算法、Python 与 Agent 学习手记</h1>
-      <div class="sub">INTERVIEW NOTES · ALGORITHMS + PYTHON + AGENT</div>
+      <h1>{SITE.name}</h1>
+      <div class="sub">{SITE.en.toUpperCase()} · PYTHON → AGENT</div>
     </div>
   </a>
   <nav class="mainnav">
-    {categoryConfig.map((category) => (
-      <a class={active === category.key ? 'cur' : ''} href={withBase(`/#${category.key}`)}>
-        {category.label.cn}
+    <a class={active ? '' : 'cur'} href={withBase('/#roadmap')}>路线</a>
+    {boards.map((board) => (
+      <a class={active === board.key ? 'cur' : ''} href={withBase(`/#${board.key}`)}>
+        {board.label.cn}
       </a>
     ))}
   </nav>

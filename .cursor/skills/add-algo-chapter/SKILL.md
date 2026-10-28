@@ -21,7 +21,8 @@ consistently with the existing 链表 (linked-list) and 二叉树 (binary-tree) 
 ## Architecture (what to know)
 
 - **Astro static site**, deployed to GitHub Pages via `.github/workflows/deploy.yml`. Pushing to `main` auto-triggers a Pages deploy.
-- **Data-driven**: `src/data/topics.ts` is the single registry. Homepage cards + each page's sidebar are generated from it.
+- **Data-driven**: `src/data/topics.ts` is the single registry. `chapters` holds chapter data; `category` only decides the URL prefix (`/topics`, `/python`, `/framework`, `/component`, `/agent`). `boards` decides where the chapter shows up: four boards (Python 工程 / 中间件 / Agent / 面试), each split into roadmap stages with a goal and a 需要掌握 checklist. The homepage roadmap, header nav, and sidebar all read `boards`. The build throws if a chapter is missing from `boards` or listed twice. Algorithm problems live in the 面试 board's 算法 stage.
+- **Site name**: `SITE` in `topics.ts` (currently Agent 工程手记). Pages pass only the chapter title to `BaseLayout`; the layout appends the site name.
 - **Real source files**: every code block on a page is a real, editable, runnable file under `src/code/<slug>/`, imported at build time with Vite `?raw`. One source, two uses (runs locally + renders on site).
 - **Per-chapter manifest**: `src/data/<slug>-code.ts` imports those files with `?raw` and exports `CODE_DIR` + `CodeVariant[]` (multi-language) + single code strings.
 - **Git remote is SSH**: `git@github.com:shoujche/algorithm-notes.git`. Owner/user: `shoujche`.
@@ -31,7 +32,7 @@ consistently with the existing 链表 (linked-list) and 二叉树 (binary-tree) 
 Copy and track:
 
 ```
-- [ ] 1. Register chapter in src/data/topics.ts (ready:true + sections[])
+- [ ] 1. Register chapter in src/data/topics.ts (ready:true + sections[]), add its slug to a stage in `boards` (update that stage's 需要掌握 list if the chapter adds new skills)
 - [ ] 2. Write real source files under src/code/<slug>/
 - [ ] 3. Create manifest src/data/<slug>-code.ts (?raw imports + exports)
 - [ ] 4. Build page src/pages/topics/<slug>.astro (hero + <section class="article"> per topic)

@@ -21,7 +21,7 @@ const chapter = chapters.find((item) => item.slug === 'stdlib-types')!;
 const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
 const duck = withBase('/python/py-basics#duck-typing');
 ---
-<BaseLayout title="架构里的标准库类型 · Python · 算法、Python 与 Agent 学习手记" active="python">
+<BaseLayout title="架构里的标准库类型">
   <div class="layout">
     <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
     <main>

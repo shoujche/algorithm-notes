@@ -9,12 +9,12 @@ import { withBase } from '../../lib/url';
 
 const chapter = chapters.find((item) => item.slug === 'agent-interview')!;
 ---
-<BaseLayout title="Agent 核心真题 · Agent · 算法、Python 与 Agent 学习手记" active="agent">
+<BaseLayout title="Agent 核心真题">
   <div class="layout">
     <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
     <main>
       <div class="hero">
-        <span class="eyebrow">Agent / {chapter.num} · Agent 核心真题</span>
+        <span class="eyebrow">面试 · 真题 / {chapter.num} · Agent 核心真题</span>
         <h2>开发岗怎么讲 <em>Agent</em>：<br />循环、工具、护栏</h2>
         <p>题目来自 <a class="chapter-link" href="https://github.com/adongwanai/AgentGuide/blob/main/docs/04-interview/03-agent-questions.md">AgentGuide · Agent 核心篇</a>。答案只保留开发岗：架构、记忆、工具容错、并发隔离、安全。微调数据集、具身、LoRA 冻层、Toolformer 训练等算法岗题不展开。白板代码见 <a class="chapter-link" href={withBase('/agent/agent-hands-on')}>A05</a>。</p>
         <div class="meta">

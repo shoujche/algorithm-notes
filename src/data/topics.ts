@@ -1,4 +1,13 @@
-// 章节注册表：首页列表与侧边栏都从这里生成，加新章节只需在此登记 + 新建对应页面。
+// 章节注册表：首页路线、顶部导航与侧边栏都从这里生成。
+// 加新章节：在 chapters 登记、新建页面，再把 slug 放进 boards 里某个阶段。
+
+export const SITE = {
+  name: 'Agent 工程手记',
+  en: 'Agent Engineering Notes',
+  logo: 'AE',
+  tagline: '从 Python 到 Agent 的学习路线',
+  description: '一条从 Python 工程、中间件到 Agent 开发与评测的学习路线：每个阶段写清要掌握什么，配可运行的代码和面试题。',
+};
 
 export type Difficulty = 'base' | 'easy' | 'mid' | 'hard';
 
@@ -469,7 +478,7 @@ interface CategoryConfig {
   chapters: Chapter[];
 }
 
-// 分类展示名、路由前缀与章节派生集中在一处，首页、顶部导航和侧栏共同复用。
+// category 只决定 URL 前缀；页面怎么分组展示由下面的 boards 决定。
 export const categoryConfig: CategoryConfig[] = [
   {
     key: 'algo',
@@ -502,3 +511,200 @@ export const categoryConfig: CategoryConfig[] = [
     chapters: agentChapters,
   },
 ];
+
+export type Board = 'python' | 'middleware' | 'agent' | 'interview';
+
+export interface Stage {
+  id: string;       // 首页锚点
+  title: string;
+  goal: string;     // 走完这一段应该做到什么
+  master: string[]; // 需要掌握
+  slugs: string[];  // 按阅读顺序
+}
+
+export interface BoardConfig {
+  key: Board;
+  label: { cn: string; en: string };
+  intro: string;
+  stages: Stage[];
+}
+
+export const boards: BoardConfig[] = [
+  {
+    key: 'python',
+    label: { cn: 'Python 工程', en: 'Python Engineering' },
+    intro: '先把语言和运行时吃透，再用类型、库和 Web 框架把服务搭起来。Agent 的工具、接口和并发控制都建在这一层上。',
+    stages: [
+      {
+        id: 'runtime',
+        title: '语言与运行时',
+        goal: '说清 Python 对象怎么存、怎么传、什么时候被回收。',
+        master: [
+          '可变与不可变、is 与 ==、深浅拷贝',
+          '参数按对象引用传递，可变默认参数与闭包延迟绑定',
+          '魔术方法、装饰器、生成器、上下文管理器、描述符',
+          '引用计数、循环引用、分代 GC 与 __slots__',
+        ],
+        slugs: ['py-basics', 'data-model', 'memory-gc'],
+      },
+      {
+        id: 'concurrency',
+        title: '并发与网络',
+        goal: '判断一段代码该用线程、进程还是协程，写出不阻塞的流式接口。',
+        master: [
+          'GIL 的调度方式，CPU 密集与 I/O 密集各怎么选',
+          '事件循环、async/await、gather，以及阻塞事件循环的坑',
+          'HTTP 状态码，SSE 与 WebSocket 的取舍',
+          '流式输出、背压与超时',
+        ],
+        slugs: ['concurrency-gil', 'asyncio', 'network-streaming'],
+      },
+      {
+        id: 'structure',
+        title: '类型与项目结构',
+        goal: '用标准库类型把模块边界写清楚，按场景挑 ORM 和缓存库。',
+        master: [
+          'Protocol、ABC、Literal、TypedDict、dataclass 各放在哪一层',
+          '用 collections.abc 描述参数和返回值',
+          'Peewee 与另外两种 ORM 的取舍',
+          'cachetools 进程内缓存与 Redis 缓存怎么分工',
+        ],
+        slugs: ['stdlib-types', 'libraries'],
+      },
+      {
+        id: 'web',
+        title: 'Web 框架',
+        goal: '用 Django、Flask、FastAPI 各写一遍同一个接口，讲清各自的请求生命周期。',
+        master: [
+          '中间件、请求与应用上下文、依赖注入',
+          'ORM 惰性查询、N+1 与预加载、事务防超卖',
+          'Pydantic 校验与 DRF 序列化',
+          'async 视图、后台任务、流式响应',
+        ],
+        slugs: ['django', 'flask', 'fastapi'],
+      },
+    ],
+  },
+  {
+    key: 'middleware',
+    label: { cn: '中间件', en: 'Middleware' },
+    intro: '缓存和消息队列是后端服务和 Agent 平台都绕不开的组件。重点是它们在什么条件下会丢数据、重复投递或者不一致。',
+    stages: [
+      {
+        id: 'cache-mq',
+        title: '缓存与消息',
+        goal: '用 Redis 做缓存和锁，讲清 Kafka 与 RabbitMQ 各自的投递保证。',
+        master: [
+          'Redis 五种结构、过期、管道与事务',
+          'SET NX PX 加锁、Lua 核对 token 解锁、旁路缓存的一致性',
+          'Kafka 分区、副本、消费组，生产者批量与 acks，位点提交',
+          'RabbitMQ 交换机路由、发布确认、手动 ack、幂等与死信',
+        ],
+        slugs: ['redis', 'kafka', 'rabbitmq'],
+      },
+    ],
+  },
+  {
+    key: 'agent',
+    label: { cn: 'Agent', en: 'Agent' },
+    intro: '从模型原理到工具调用循环，再到框架和评测，是整条路线的重点。',
+    stages: [
+      {
+        id: 'agent-basics',
+        title: '模型与 Agent 原理',
+        goal: '知道模型为什么会调用工具，不靠框架写出一个可控的 Agent 循环。',
+        master: [
+          'Transformer、注意力、解码策略与 KV Cache',
+          'ReAct 循环的状态与退出条件',
+          'Skills 渐进式披露与 MCP 工具接入',
+          '沙盒信任边界，暂停、审批与恢复',
+        ],
+        slugs: ['agent-theory', 'react-agent-loop'],
+      },
+      {
+        id: 'agent-frameworks',
+        title: 'Agent 框架',
+        goal: '用框架管理状态、检索和长任务，并知道每个框架替你做了什么。',
+        master: [
+          'LangGraph 状态图、interrupt 与 Command、检查点与线程',
+          'LlamaIndex 切块、索引、Query Engine 与入库流水线',
+          'Deep Agents 虚拟文件、路径权限、子代理与跨线程记忆',
+        ],
+        slugs: ['langgraph', 'llamaindex', 'deepagents'],
+      },
+      {
+        id: 'agent-quality',
+        title: '评测与上线',
+        goal: '用数字说明一次改动让 Agent 变好还是变差。',
+        master: [
+          '评测分层与 harness，评测集的版本与污染',
+          'RAG 检索与生成指标、记忆探针、轨迹匹配与 pass^k',
+          'LLM 裁判校准与 bootstrap 发布门槛',
+          'RAGAS、DeepEval、Inspect、LangSmith、promptfoo 与线上评估',
+        ],
+        slugs: ['agent-eval'],
+      },
+    ],
+  },
+  {
+    key: 'interview',
+    label: { cn: '面试', en: 'Interview' },
+    intro: '前面每章末尾都附了面试题。这里集中放需要单独练的部分：算法题、手撕代码和高频真题。',
+    stages: [
+      {
+        id: 'algorithms',
+        title: '算法',
+        goal: '高频数据结构题能在白板上一次写对，并说出复杂度。',
+        master: [
+          '链表反转与 LRU 缓存',
+          '二叉树遍历、层序 BFS、最近公共祖先',
+          '动态规划的状态定义、转移方程与空间压缩',
+        ],
+        slugs: ['linked-list', 'stack-queue', 'binary-tree', 'dynamic-programming'],
+      },
+      {
+        id: 'coding',
+        title: '手撕代码',
+        goal: '常见工程题和 Agent 组件能在 30 分钟内手写出来。',
+        master: [
+          '计时与重试装饰器、LRU、异步限流器与并发池',
+          '手写 ReAct Agent、Tool Registry 与记忆',
+          'Chain-of-Thought、Self-Reflection 与三种切块',
+        ],
+        slugs: ['hands-on', 'agent-hands-on'],
+      },
+      {
+        id: 'questions',
+        title: '高频真题',
+        goal: 'RAG 和 Agent 的常见问题能讲出原理、取舍和线上经验。',
+        master: [
+          'RAG 完整链路、召回与排序、检索错与生成错',
+          'Function Calling 与 MCP',
+          '记忆、工具失败处理、Multi-Agent、评估与迭代',
+        ],
+        slugs: ['rag-interview', 'agent-interview'],
+      },
+    ],
+  },
+];
+
+const chapterBySlug = new Map(chapters.map((c) => [c.slug, c]));
+const routePrefixOf = new Map(categoryConfig.map((c) => [c.key, c.routePrefix]));
+const boardBySlug = new Map(
+  boards.flatMap((b) => b.stages.flatMap((s) => s.slugs.map((slug) => [slug, b.key] as const))),
+);
+
+{
+  const placed = boards.flatMap((b) => b.stages.flatMap((s) => s.slugs));
+  const missing = chapters.filter((c) => !placed.includes(c.slug)).map((c) => c.slug);
+  const unknown = placed.filter((slug) => !chapterBySlug.has(slug));
+  const duplicated = placed.filter((slug, i) => placed.indexOf(slug) !== i);
+  if (missing.length || unknown.length || duplicated.length) {
+    throw new Error(`boards 与 chapters 不一致：缺少 ${missing} 未知 ${unknown} 重复 ${duplicated}`);
+  }
+}
+
+export const chapterPath = (c: Chapter): string => `${routePrefixOf.get(c.category)}/${c.slug}`;
+export const stageChapters = (s: Stage): Chapter[] => s.slugs.map((slug) => chapterBySlug.get(slug)!);
+export const boardChapters = (b: BoardConfig): Chapter[] => b.stages.flatMap(stageChapters);
+export const boardOfSlug = (slug: string): Board | undefined => boardBySlug.get(slug);

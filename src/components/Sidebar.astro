@@ -1,6 +1,6 @@
 ---
 import type { Section } from '../data/topics';
-import { categoryConfig } from '../data/topics';
+import { boardChapters, boards, chapterPath } from '../data/topics';
 import { leetcodeProblemUrl } from '../lib/leetcode';
 import { withBase } from '../lib/url';
 
@@ -35,12 +35,12 @@ const { chapterCn, chapterEn, currentSlug, sections = [] } = Astro.props;
       ))}
     </div>
 
-    {categoryConfig.map((g) => (
+    {boards.map((b) => (
       <div class="nav-group">
-        <span class="eyebrow">{g.label.cn} / {g.label.en}</span>
-        {g.chapters.map((c) => (
+        <span class="eyebrow">{b.label.cn === b.label.en ? b.label.cn : `${b.label.cn} / ${b.label.en}`}</span>
+        {boardChapters(b).map((c) => (
           c.ready ? (
-            <a href={withBase(`${g.routePrefix}/${c.slug}`)} class={c.slug === currentSlug ? 'chapter-cur' : ''}>
+            <a href={withBase(chapterPath(c))} class={c.slug === currentSlug ? 'chapter-cur' : ''}>
               <span class="idx">{c.num}</span>{c.cn}
             </a>
           ) : (

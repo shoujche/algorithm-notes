@@ -20,12 +20,12 @@ const chapter = chapters.find((item) => item.slug === 'rag-interview')!;
 const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
 const a07 = withBase('/agent/llamaindex');
 ---
-<BaseLayout title="RAG 面试真题 · Agent · 算法、Python 与 Agent 学习手记" active="agent">
+<BaseLayout title="RAG 面试真题">
   <div class="layout">
     <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
     <main>
       <div class="hero">
-        <span class="eyebrow">Agent / {chapter.num} · RAG 面试真题</span>
+        <span class="eyebrow">面试 · 真题 / {chapter.num} · RAG 面试真题</span>
         <h2>开发岗怎么讲 <em>RAG</em>：<br />流水线、取舍、能上线</h2>
         <p>22 道题来自 AgentGuide。答案按理论基础篇同款结构：先考点，再分段展开，能对比就列表，最后加分追问。只保留开发岗口径——怎么建索引、怎么混合检索、怎么控延迟和权限，不讲算法岗的公式推导和训练细节。库怎么把切块、索引和查询跑起来，见 <a class="chapter-link" href={a07}>A07 LlamaIndex</a>。</p>
         <div class="meta">

@@ -25,12 +25,12 @@ const chapter = chapters.find((c) => c.slug === 'dynamic-programming')!;
 const problem = (id: string) => sectionProblemUrl(chapter, id);
 const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
 ---
-<BaseLayout title="动态规划 Dynamic Programming · 算法与 Python 面试手记" active="algo">
+<BaseLayout title="动态规划 Dynamic Programming">
   <div class="layout">
     <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
     <main>
       <div class="hero">
-        <span class="eyebrow">算法与 Python 面试手记 / 第 {chapter.num} 章 · 动态规划 Dynamic Programming</span>
+        <span class="eyebrow">面试 · 算法 / CH.{chapter.num} · 动态规划 Dynamic Programming</span>
         <h2>先把<em>整张表</em>填出来</h2>
         <p>每题都先开完整的 <kbd>dp</kbd> 数组，看清这一格从哪些旧格子来。一维题在同一文件后半再给只留前两格的写法。顺序从 Easy 往上：爬楼梯、最小花费、最大子数组和，然后打家劫舍、零钱兑换、最长递增子序列，最后两张二维表。</p>
         <div class="meta">

@@ -16,7 +16,7 @@ import { ghBlob } from '../../lib/github';
 const chapter = chapters.find((c) => c.slug === 'fastapi')!;
 const fullDoc = ghBlob('docs/python-frameworks/fastapi.md');
 ---
-<BaseLayout title="FastAPI 工程 · Python 框架 · 算法与 Python 面试手记" active="framework">
+<BaseLayout title="FastAPI 工程">
   <div class="layout">
     <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
     <main>

@@ -20,12 +20,12 @@ import { withBase } from '../../lib/url';
 const chapter = chapters.find((item) => item.slug === 'agent-hands-on')!;
 const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
 ---
-<BaseLayout title="Agent 手撕代码 · Agent · 算法、Python 与 Agent 学习手记" active="agent">
+<BaseLayout title="Agent 手撕代码">
   <div class="layout">
     <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
     <main>
       <div class="hero">
-        <span class="eyebrow">Agent / {chapter.num} · Agent 手撕代码</span>
+        <span class="eyebrow">面试 · 手撕 / {chapter.num} · Agent 手撕代码</span>
         <h2>白板上能写完的 <em>Agent</em></h2>
         <p>五道手撕都是最小可运行 Python：不接真实模型、不放密钥。生产级循环、审批和沙盒见 <a class="chapter-link" href={withBase('/agent/react-agent-loop')}>A01</a>。</p>
         <div class="meta">

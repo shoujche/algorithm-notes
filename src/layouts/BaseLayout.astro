@@ -1,21 +1,21 @@
 ---
 import '../styles/global.css';
 import SiteHeader from '../components/SiteHeader.astro';
-import type { Category } from '../data/topics';
+import { SITE } from '../data/topics';
 
 interface Props {
-  title: string;
+  title?: string;
   description?: string;
-  active?: Category;
 }
-const { title, description = '算法、Python 与 Agent 学习手记 — 图解数据结构与算法，深入 Python 工程与 Agent 系统', active } = Astro.props;
+const { title, description = SITE.description } = Astro.props;
+const fullTitle = title ? `${title} · ${SITE.name}` : `${SITE.name} · ${SITE.tagline}`;
 ---
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{title}</title>
+  <title>{fullTitle}</title>
   <meta name="description" content={description} />
   <link rel="icon" type="image/svg+xml" href={`${import.meta.env.BASE_URL}/favicon.svg`.replace(/\/+/g, '/')} />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -23,11 +23,11 @@ const { title, description = '算法、Python 与 Agent 学习手记 — 图解�
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet" />
 </head>
 <body>
-  <SiteHeader active={active} />
+  <SiteHeader />
   <slot />
   <footer>
-    <span>算法、Python 与 Agent 学习手记</span>
-    <span class="mono">Algorithms · Python · Agent · Built with Astro</span>
+    <span>{SITE.name} · {SITE.tagline}</span>
+    <span class="mono">Python · Middleware · Agent · Interview · Built with Astro</span>
   </footer>
 </body>
 </html>

@@ -1,49 +1,91 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
-import { agentChapters, algoChapters, categoryConfig, componentChapters, frameworkChapters, pythonChapters } from '../data/topics';
+import { SITE, boardChapters, boards, chapterPath, stageChapters } from '../data/topics';
 import { withBase } from '../lib/url';
+
+let counter = 0;
+const roadmap = boards.map((board) => ({
+  ...board,
+  ready: boardChapters(board).filter((c) => c.ready).length,
+  stages: board.stages.map((stage) => ({
+    ...stage,
+    n: String(++counter).padStart(2, '0'),
+    chapters: stageChapters(stage),
+  })),
+}));
 ---
-<BaseLayout title="算法、Python 与 Agent 学习手记 · Interview Notes">
+<BaseLayout>
   <div class="home-wrap">
     <div class="hero">
-      <span class="eyebrow">算法、Python 与 Agent 学习手记 · Interview Notes</span>
-      <h2>图解<em>算法</em> · 深入 <em>Python</em> · 构建 <em>Agent</em></h2>
-      <p>从零记录数据结构与算法、Python 工程和 Agent 系统的学习：用分步动画拆解经典题目，也梳理语言机制、并发、工具调用、沙盒与审批流程。</p>
+      <span class="eyebrow">{SITE.en} · 学习路线</span>
+      <h2>从 <em>Python</em> 到 <em>Agent</em>，<br />一条自己走过的路线</h2>
+      <p>{SITE.description}</p>
+      <p>顺着阶段往下读，每段先看「需要掌握」，再进章节。只想准备面试的话，直接跳到最后的面试板块。</p>
       <div class="meta">
-        <div><span class="n">{algoChapters.length}</span><span class="l">Algorithms</span></div>
-        <div><span class="n">{pythonChapters.length}</span><span class="l">Python</span></div>
-        <div><span class="n">{frameworkChapters.length}</span><span class="l">Frameworks</span></div>
-        <div><span class="n">{componentChapters.length}</span><span class="l">Components</span></div>
-        <div><span class="n">{agentChapters.length}</span><span class="l">Agent</span></div>
-        <div><span class="n">动画</span><span class="l">Visual</span></div>
-        <div><span class="n">开源</span><span class="l">Open Source</span></div>
+        {roadmap.map((b) => (
+          <div><span class="n">{b.ready}</span><span class="l">{b.label.en}</span></div>
+        ))}
+        <div><span class="n">{counter}</span><span class="l">Stages</span></div>
       </div>
     </div>
 
-    {categoryConfig.map((g) => (
-      <section id={g.key} class="cat-block">
-        <h4 class="sub">{g.label.cn} · {g.label.en}</h4>
-        <div class="topic-grid">
-          {g.chapters.map((c) => (
-            c.ready ? (
-              <a class="topic-card" href={withBase(`${g.routePrefix}/${c.slug}`)}>
-                <span class="tnum">CH.{c.num}</span>
-                <h3>{c.cn}</h3>
-                <span class="ten">{c.en}</span>
-                <p>{c.summary}</p>
-                <div class="go">阅读章节 →</div>
-              </a>
-            ) : (
-              <div class="topic-card soon">
-                <span class="tnum">CH.{c.num}</span>
-                <h3>{c.cn}</h3>
-                <span class="ten">{c.en}</span>
-                <p>{c.summary}</p>
-                <div class="go"><span class="badge-soon">规划中 Soon</span></div>
-              </div>
-            )
-          ))}
+    <section id="roadmap" class="overview">
+      <h4 class="sub">路线总览 · Roadmap</h4>
+      <div class="ov-grid">
+        {roadmap.map((b) => (
+          <div class={`ov-col ov-${b.key}`}>
+            <a class="ov-board" href={`#${b.key}`}>{b.label.cn}</a>
+            <ol>
+              {b.stages.map((s) => (
+                <li><a href={`#${s.id}`}><span class="ov-n">{s.n}</span>{s.title}</a></li>
+              ))}
+            </ol>
+          </div>
+        ))}
+      </div>
+    </section>
+
+    {roadmap.map((b) => (
+      <section id={b.key} class={`board board-${b.key}`}>
+        <div class="board-head">
+          <h4 class="sub">{b.label.cn === b.label.en ? b.label.cn : `${b.label.cn} · ${b.label.en}`}</h4>
+          <p>{b.intro}</p>
         </div>
+
+        {b.stages.map((s) => (
+          <div class="step" id={s.id}>
+            <div class="step-info">
+              <span class="step-n">STAGE {s.n}</span>
+              <h3>{s.title}</h3>
+              <p class="goal">{s.goal}</p>
+              <span class="master-lbl">需要掌握</span>
+              <ul class="master">
+                {s.master.map((m) => <li>{m}</li>)}
+              </ul>
+            </div>
+            <div class="step-cards">
+              {s.chapters.map((c) => (
+                c.ready ? (
+                  <a class="topic-card" href={withBase(chapterPath(c))}>
+                    <span class="tnum">CH.{c.num}</span>
+                    <h3>{c.cn}</h3>
+                    <span class="ten">{c.en}</span>
+                    <p>{c.summary}</p>
+                    <div class="go">阅读章节 →</div>
+                  </a>
+                ) : (
+                  <div class="topic-card soon">
+                    <span class="tnum">CH.{c.num}</span>
+                    <h3>{c.cn}</h3>
+                    <span class="ten">{c.en}</span>
+                    <p>{c.summary}</p>
+                    <div class="go"><span class="badge-soon">规划中 Soon</span></div>
+                  </div>
+                )
+              ))}
+            </div>
+          </div>
+        ))}
       </section>
     ))}
   </div>
@@ -51,6 +93,62 @@ import { withBase } from '../lib/url';
 
 <style>
   .home-wrap { max-width: 1180px; margin: 0 auto; padding: 34px 30px; }
-  .cat-block { margin-top: 8px; scroll-margin-top: 88px; }
-  .cat-block + .cat-block { margin-top: 40px; }
+  .hero h2 { max-width: none; }
+  .hero p + p { margin-top: 10px; }
+
+  section { scroll-margin-top: 88px; }
+  .step { scroll-margin-top: 88px; }
+
+  .overview { margin-bottom: 52px; }
+  .ov-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 10px; }
+  .ov-col { border: 1px solid var(--line); border-radius: 14px; background: var(--surface);
+    padding: 16px 16px 12px; border-top: 3px solid var(--board-color); }
+  .ov-board { font-family: var(--font-display); font-weight: 600; font-size: 15px; color: var(--ink); }
+  .ov-board:hover { color: var(--board-color); }
+  .ov-col ol { list-style: none; margin: 10px 0 0; padding: 0; }
+  .ov-col li a { display: flex; gap: 10px; align-items: baseline; padding: 6px 0;
+    font-size: 14px; color: var(--graphite); border-top: 1px dashed var(--line); }
+  .ov-col li:first-child a { border-top: none; }
+  .ov-col li a:hover { color: var(--board-color); }
+  .ov-n { font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: var(--board-color); }
+
+  .ov-python, .board-python { --board-color: var(--cobalt); }
+  .ov-middleware, .board-middleware { --board-color: var(--teal); }
+  .ov-agent, .board-agent { --board-color: var(--orange); }
+  .ov-interview, .board-interview { --board-color: var(--red); }
+
+  .board + .board { margin-top: 56px; }
+  .board-head p { margin: 6px 0 0; color: var(--graphite); max-width: 70ch; font-size: 15px; }
+  .board h4.sub::before { background: var(--board-color); }
+
+  .step { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 22px;
+    padding: 26px 0; border-bottom: 1px solid var(--line); }
+  .step:last-child { border-bottom: none; }
+  .step-info { border-left: 2px solid var(--board-color); padding-left: 16px; align-self: start; }
+  .step-n { font-family: var(--font-mono); font-size: 11px; font-weight: 600; letter-spacing: 1.2px;
+    color: var(--board-color); }
+  .step-info h3 { font-family: var(--font-display); font-size: 21px; font-weight: 600;
+    letter-spacing: -0.3px; margin: 6px 0 8px; }
+  .goal { margin: 0; color: var(--ink); font-size: 14.5px; line-height: 1.65; }
+  .master-lbl { display: block; margin-top: 14px; font-family: var(--font-mono); font-size: 10.5px;
+    font-weight: 600; letter-spacing: 1px; color: var(--muted); }
+  .master { margin: 6px 0 0; padding: 0; list-style: none; }
+  .master li { position: relative; padding-left: 16px; margin-top: 5px; font-size: 13.5px;
+    line-height: 1.6; color: var(--graphite); }
+  .master li::before { content: ""; position: absolute; left: 2px; top: 0.62em; width: 6px; height: 6px;
+    border-radius: 2px; border: 1.5px solid var(--board-color); }
+
+  .step-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px;
+    align-content: start; }
+  .step-cards .topic-card .tnum { color: var(--board-color); }
+  .step-cards .topic-card:hover { border-color: var(--board-color); }
+
+  @media (max-width: 900px) {
+    .ov-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .step { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 520px) {
+    .home-wrap { padding: 24px 18px; }
+    .ov-grid { grid-template-columns: 1fr; }
+  }
 </style>

@@ -21,7 +21,7 @@ const chapter = chapters.find((item) => item.slug === 'rabbitmq')!;
 const src = (file: string) => ghBlob(`${CODE_DIR}/${file}`);
 const kafka = withBase('/component/kafka');
 ---
-<BaseLayout title="RabbitMQ · 组件 · 算法、Python 与 Agent 学习手记" active="component">
+<BaseLayout title="RabbitMQ">
   <div class="layout">
     <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
     <main>

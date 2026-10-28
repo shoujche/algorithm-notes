@@ -1,7 +1,7 @@
-# 算法手记 · Algo Notes
+# Agent 工程手记 · Agent Engineering Notes
 
-> 图解数据结构与算法，带分步动画的 LeetCode 题解
-> Visual data structures & algorithms notes with animated LeetCode solutions.
+> 从 Python 到 Agent 的学习路线：每个阶段写清要掌握什么，配可运行的代码和面试题
+> A learning roadmap from Python engineering and middleware to building and evaluating agents.
 
 ### 🌐 在线访问 · Live
 
@@ -12,7 +12,16 @@
 
 ---
 
-从零开始记录数据结构与算法的学习，用可交互的分步动画拆解每一道经典题。基于 [Astro](https://astro.build) 构建，纯静态，部署在 GitHub Pages。
+这是一份自己整理的学习路线，分四个板块、11 个阶段：
+
+| 板块 | 阶段 |
+| --- | --- |
+| Python 工程 | 语言与运行时 → 并发与网络 → 类型与项目结构 → Web 框架 |
+| 中间件 | 缓存与消息（Redis、Kafka、RabbitMQ） |
+| Agent | 模型与 Agent 原理 → Agent 框架 → 评测与上线 |
+| 面试 | 算法 → 手撕代码 → 高频真题 |
+
+每个阶段在首页列出目标和「需要掌握」清单，章节里的代码都是仓库中可以直接运行的源文件。站点基于 [Astro](https://astro.build) 构建，纯静态，部署在 GitHub Pages。路线结构定义在 [`src/data/topics.ts`](src/data/topics.ts) 的 `boards` 里。
 
 ## 本地开发
 

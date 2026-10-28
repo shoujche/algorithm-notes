@@ -22,6 +22,12 @@ Flip `ready` to `true` and add `sections`. `id` is the in-page anchor; `lc` show
 },
 ```
 
+Then put the slug into a stage of `boards` (same file), in reading order:
+
+```ts
+{ id: 'algorithms', title: '算法', goal: '…', master: ['…'], slugs: ['linked-list', 'stack-queue', 'binary-tree', 'dynamic-programming'] },
+```
+
 ## 2. Real source files — `src/code/<slug>/`
 
 - Basics (4 languages): `tree_node.py`, `TreeNode.java`, `tree_node.go`, `tree_node.cpp`.
@@ -80,12 +86,12 @@ const chapter = chapters.find((c) => c.slug === 'binary-tree')!;
 Body: hero + one `<section>` per topic.
 
 ```astro
-<BaseLayout title="二叉树 Binary Tree · 算法手记">
+<BaseLayout title="二叉树 Binary Tree">
   <div class="layout">
     <Sidebar chapterCn={chapter.cn} chapterEn={chapter.en} currentSlug={chapter.slug} sections={chapter.sections} />
     <main>
       <div class="hero">
-        <span class="eyebrow">算法手记 / 第 {chapter.num} 章 · 二叉树 Binary Tree</span>
+        <span class="eyebrow">面试 · 算法 / CH.{chapter.num} · 二叉树 Binary Tree</span>
         <h2>标题：可用 <em>强调词</em><br />副标题</h2>
         <p>章节导语。</p>
         <div class="meta">
